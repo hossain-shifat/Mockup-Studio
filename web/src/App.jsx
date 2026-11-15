@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Undo2, Redo2, Download, Save, Camera, LayoutTemplate, Layers, Palette, Copy, Trash2, ArrowUp, ArrowDown, Upload, RotateCcw, Loader2, Check, Plus, Minus, Maximize, Sparkles, Mail, Lock, Link2, Eye, EyeOff, Square, Globe, LayoutGrid, ArrowLeft } from "lucide-react";
+import { Undo2, Redo2, Download, Save, Camera, LayoutTemplate, Layers, Palette, Copy, Trash2, ArrowUp, ArrowDown, Upload, RotateCcw, Loader2, Check, Plus, Minus, Maximize, Sparkles, Mail, Lock, Link2, Eye, EyeOff, Square, Globe, LayoutGrid, ArrowLeft, Server, KeyRound } from "lucide-react";
 import { DEVICES, drawScene, hitTest, preload } from "./render";
 import { makeZip, zipStream } from "./zip";
 import { generate } from "./auto";
@@ -91,6 +91,9 @@ export default function App() {
     const [shots, setShots] = useState([]);
     const [tab, setTab] = useState("capture");
     const [url, setUrl] = useState(() => lsGet("ms:url", "http://localhost:5173"));
+    const [server, setServer] = useState(() => lsGet("ms:server", API)); // which capture server to use: this PC or a hosted one
+    const [accessKey, setAccessKey] = useState(() => lsGet("ms:key", ""));
+    const base = (server || API).trim().replace(/\/+$/, "");
     const [cap, setCap] = useState({ busy: false, msg: "", done: 0, total: 0, error: null, note: "", scrollNote: "" });
     const [login, setLogin] = useState(() => ({ open: !!lsGet("ms:email", ""), email: lsGet("ms:email", ""), password: "", url: lsGet("ms:loginUrl", "") })); // email + login page remembered; password never saved
     const [crawl, setCrawl] = useState(true);
@@ -107,9 +110,10 @@ export default function App() {
     const [asZip, setAsZip] = useState(true);
     const [sessionInfo, setSessionInfo] = useState(null); // open sign-in kept on the capture server
     const [keepIn, setKeepIn] = useState(true);
-    const sessRef = useRef(null); sessRef.current = sessionInfo;
+    const sessRef = useRef(null), baseRef = useRef(""), keyRef = useRef("");
+    sessRef.current = sessionInfo; baseRef.current = base; keyRef.current = accessKey;
     useEffect(() => { // closing the studio tab ends the sign-in on the site
-        const f = () => { const id = sessRef.current?.id; if (id) navigator.sendBeacon(`${API}/api/session/end`, new Blob([JSON.stringify({ sessionId: id })], { type: "application/json" })); };
+        const f = () => { const id = sessRef.current?.id; if (id) navigator.sendBeacon(`${baseRef.current}/api/session/end`, new Blob([JSON.stringify({ sessionId: id, key: keyRef.current })], { type: "application/json" })); };
         window.addEventListener("pagehide", f); return () => window.removeEventListener("pagehide", f);
     }, []);
     const [zoom, setZoom] = useState(0.5);
@@ -124,7 +128,7 @@ export default function App() {
     const docRef = useRef(doc); docRef.current = doc;
     const past = useRef([]), fut = useRef([]);
     useEffect(() => { document.fonts?.ready.then(() => setTick((t) => t + 1)); }, []); // redraw once web fonts are ready
-    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); } catch { /* private mode */ } }, [login.email, login.url, url]);
+    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); localStorage.setItem("ms:server", server); localStorage.setItem("ms:key", accessKey); } catch { /* private mode */ } }, [login.email, login.url, url, server, accessKey]);
 
     // history
     const mark = () => { past.current.push(docRef.current); if (past.current.length > 80) past.current.shift(); fut.current = []; };
@@ -187,7 +191,7 @@ export default function App() {
         const id = sessionInfo?.id; if (!id) return;
         setSessionInfo(null);
         try {
-            const r = await fetch(`${API}/api/session/end`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: id }) });
+            const r = await fetch(`${base}/api/session/end`, { method: "POST", headers: { "Content-Type": "application/json", ...(accessKey ? { "X-Access-Key": accessKey } : {}) }, body: JSON.stringify({ sessionId: id }) });
             const d = await r.json();
             setCap((s) => ({ ...s, error: null, note: d.signedOut ? "Signed out of the site." : "Session closed. No sign-out button was found on the site." }));
         } catch { setCap((s) => ({ ...s, error: "Could not reach the capture server to sign out." })); }
@@ -200,8 +204,8 @@ export default function App() {
         const ac = new AbortController(); abortRef.current = ac;
         try { path = new URL(url).pathname; } catch { /* server reports invalid URL */ }
         try {
-            const res = await fetch(`${API}/api/capture`, { method: "POST", signal: ac.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: target, sessionId: sessionInfo?.id, keep: keepIn, sections, crawl, maxPages, login: login.password ? { email: login.email, password: login.password, url: login.url || undefined } : undefined }) });
-            if (!res.ok || !res.body) throw new Error("Capture server not reachable. Run: cd server && npm run local");
+            const res = await fetch(`${base}/api/capture`, { method: "POST", signal: ac.signal, headers: { "Content-Type": "application/json", ...(accessKey ? { "X-Access-Key": accessKey } : {}) }, body: JSON.stringify({ url: target, sessionId: sessionInfo?.id, keep: keepIn, sections, crawl, maxPages, login: login.password ? { email: login.email, password: login.password, url: login.url || undefined } : undefined }) });
+            if (!res.ok || !res.body) throw new Error(res.status === 401 ? "The capture server needs its access key. Enter it under Capture server." : "Capture server not reachable. Check the Capture server address, and that it is running.");
             const rd = res.body.getReader(), dec = new TextDecoder(); let buf = "";
             for (;;) {
                 const { done, value } = await rd.read(); if (done) break;
@@ -365,6 +369,10 @@ export default function App() {
                         <div>
                             <Head>Website address</Head>
                             <Field icon={Globe} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !cap.busy && capture()} placeholder="https://… or http://localhost:5173" spellCheck={false} />
+                            <div className="mt-3 space-y-2.5">
+                                <Field icon={Server} label="Capture server" value={server} onChange={(e) => setServer(e.target.value)} placeholder={API || "http://localhost:5050"} spellCheck={false} />
+                                <Field icon={KeyRound} label="Access key (hosted server only)" type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder="Leave empty for your own PC" autoComplete="off" />
+                            </div>
                             <div className="mt-4 rounded-box border border-base-300 bg-base-100/50 p-3 space-y-3">
                                 <label className="flex items-center justify-between cursor-pointer">
                                     <span className="text-sm font-medium">Sign in to the site</span>

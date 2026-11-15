@@ -8,6 +8,8 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 const PORT = process.env.PORT || 5050;
+const HOST = process.env.HOST || "127.0.0.1"; // 0.0.0.0 inside a container
+const KEY = process.env.ACCESS_KEY || ""; // optional shared secret for a public server
 const ALLOW_LOCAL = process.env.ALLOW_LOCAL === "1" || process.argv.includes("--local");
 const IDLE_MS = parseInt(process.env.SESSION_IDLE_MS || "600000", 10); // sign out after 10 idle minutes
 const META = [/^169\.254\./, /^fe80:/i, /^fd00:ec2:/i, /^100\.100\.100\.200$/, /^0\./];
@@ -45,10 +47,11 @@ async function guard(raw) {
 }
 
 async function launch() {
-    for (const channel of [process.env.BROWSER, "msedge", "chrome"].filter(Boolean)) {
-        try { return await chromium.launch({ channel }); } catch { /* try next */ }
+    const args = process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : []; // containers run as root
+    for (const channel of [process.env.BROWSER, "msedge", "chrome", "chromium"].filter(Boolean)) {
+        try { return await chromium.launch(channel === "chromium" ? { args } : { channel, args }); } catch { /* try next */ }
     }
-    throw new Fatal("No Microsoft Edge or Google Chrome found. Install one, or set BROWSER=msedge|chrome.");
+    throw new Fatal("No browser found. Install Microsoft Edge or Google Chrome, or set BROWSER=msedge|chrome|chromium.");
 }
 
 async function newCtx(browser, v, state, ok, sess) {
@@ -209,6 +212,12 @@ async function endSession(id) {
 const endAll = () => Promise.all([...sessions.keys()].map(endSession));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, async () => { await endAll(); process.exit(0); });
 
+const authed = (req) => {
+    if (!KEY) return true;
+    const got = Buffer.from(String(req.headers["x-access-key"] ?? req.body?.key ?? "")), want = Buffer.from(KEY);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
+};
+
 let busy = 0;
 const app = express();
 // Only listed origins may call this server from a browser (the Vercel site + local dev). Set ALLOWED_ORIGINS=https://your-app.vercel.app
@@ -218,7 +227,7 @@ app.use((req, res, next) => {
     if (o) {
         if (!ORIGINS.includes(o)) return res.status(403).json({ error: "Origin not allowed" });
         res.setHeader("Access-Control-Allow-Origin", o); res.setHeader("Vary", "Origin");
-        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Access-Key");
         res.setHeader("Access-Control-Allow-Private-Network", "true"); // https site -> localhost server
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -226,11 +235,15 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "20kb" }));
 
+app.get("/health", (req, res) => res.json({ ok: true })); // platform health check
+
 app.post("/api/session/end", async (req, res) => {
+    if (!authed(req)) return res.status(401).json({ error: "Access key required" });
     res.json({ signedOut: await endSession(String(req.body?.sessionId || "")) });
 });
 
 app.post("/api/capture", async (req, res) => {
+    if (!authed(req)) return res.status(401).json({ error: "Access key required" });
     res.setHeader("Content-Type", "application/x-ndjson");
     const send = (o) => res.write(JSON.stringify(o) + "\n");
     if (busy >= 2) { send({ error: "Server busy. Try again in a moment." }); return res.end(); }
@@ -382,5 +395,5 @@ app.post("/api/capture", async (req, res) => {
     }
 });
 
-app.listen(PORT, "127.0.0.1", () =>
+app.listen(PORT, HOST, () =>
     console.log(`Capture server :${PORT}  local-dev mode: ${ALLOW_LOCAL ? "ON" : "off"}`));

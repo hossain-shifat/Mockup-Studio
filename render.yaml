@@ -1,0 +1,15 @@
+# Render Blueprint: the capture server redeploys on every push to GitHub.
+services:
+  - type: web
+    name: mockup-studio-server
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: ALLOWED_ORIGINS   # your Vercel address, e.g. https://mockup-studio.vercel.app
+        sync: false
+      - key: ACCESS_KEY        # a long random secret; also type it into the studio
+        sync: false

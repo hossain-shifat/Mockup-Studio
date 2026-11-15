@@ -64,6 +64,19 @@ Use Edge or Chrome. The first time, the browser may ask to allow access to devic
 Do not use wildcard origins such as `*.vercel.app`: any site on that domain could then drive your capture server and reach your local network.
 After you change an environment variable in Vercel, redeploy so it takes effect.
 
+## Host the capture server (optional, auto-deploys from GitHub)
+
+A hosted server captures **public** websites only. It cannot reach your localhost or home network, so keep running the server on your PC for those.
+The studio has a **Capture server** field, so one deployed UI can use either.
+
+On Render:
+1. In Render choose **New, then Blueprint**, connect this GitHub repository, and pick it. Render reads `render.yaml`.
+2. When asked, set `ALLOWED_ORIGINS` to your exact Vercel address and `ACCESS_KEY` to a long random secret.
+3. Deploy. Render now rebuilds the server on every push to GitHub, just as Vercel does for the UI.
+4. In the studio, open the Capture tab, put the Render address (for example `https://mockup-studio-server.onrender.com`) under **Capture server**, and your secret under **Access key**.
+
+The container installs Chromium. Free plans sleep when idle and have little memory, so crawls can be slow or run out of memory. A paid instance is more reliable.
+
 ## Configuration
 
 | Variable | Where | Default | Purpose |
@@ -71,8 +84,10 @@ After you change an environment variable in Vercel, redeploy so it takes effect.
 | `VITE_CAPTURE_URL` | web | empty | Address of the capture server. Empty uses the Vite dev proxy. |
 | `ALLOWED_ORIGINS` | server | localhost 5173 and 5174 | Comma-separated origins allowed to call the server. |
 | `PORT` | server | `5050` | Server port. |
+| `HOST` | server | `127.0.0.1` | Bind address. The Docker image uses `0.0.0.0`. |
+| `ACCESS_KEY` | server | empty | If set, requests must send this key. Use it on any public server. |
 | `--local` flag or `ALLOW_LOCAL=1` | server | on with `npm run dev` | Allow capturing localhost and LAN addresses. |
-| `BROWSER` | server | `msedge`, then `chrome` | Browser channel to launch. |
+| `BROWSER` | server | `msedge`, `chrome`, `chromium` | Browser to launch. The Docker image uses `chromium`. |
 | `SESSION_IDLE_MS` | server | `600000` | Sign out after this many idle milliseconds. |
 
 ## Security
