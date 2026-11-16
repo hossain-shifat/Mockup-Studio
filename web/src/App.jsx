@@ -432,7 +432,7 @@ export default function App() {
                                         </div>
                                     </div>
                                 )}
-                                {HOSTED && mode === "hosted" && localAddr && <p className="text-[11px] text-base-content/60 leading-relaxed">This is a local address, so this capture runs on your computer. Start it with npm run dev in the server folder.</p>}
+                                {HOSTED && mode === "hosted" && localAddr && <p className="text-[11px] text-base-content/60 leading-relaxed">This address only exists on your own network, so the hosted server cannot open it. The capture runs on your computer: start the server there with npm run dev, or put the site online first.</p>}
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
                                     <span className={`h-2 w-2 rounded-full ${srv.state === "online" ? "bg-success" : srv.state === "checking" ? "bg-warning animate-pulse" : "bg-error"}`} />
                                     <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (base !== LOCAL ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : base === LOCAL ? "Server not running. Start it with npm run dev in the server folder." : "Hosted server not reachable. Check the address and that it is running."}</span>

@@ -62,7 +62,7 @@ async function newCtx(browser, v, state, ok, sess) {
     await ctx.route("**/*", async (r) => { // re-check every request, incl. redirects
         const u = r.request().url();
         if (/^(data|blob):/.test(u)) return r.continue();
-        try { if (!ok.has(u)) { await guard(u); ok.set(u, 1); } r.continue(); } catch { r.abort(); }
+        try { if (!ok.has(u)) { await guard(u); ok.set(u, 1); } r.continue(); } catch { try { ok.blocked?.add(new URL(u).host); } catch { /* ignore */ } r.abort(); }
     });
     if (sess && sess.data !== "{}") // sessionStorage is per-tab and not in storageState: replay it before the app boots
         await ctx.addInitScript(([o, d]) => {
@@ -90,6 +90,7 @@ async function open(page, url) {
 // error, "not found" and blank pages make bad mockups: detect and skip them
 async function isBad(page, resp) {
     if (resp && resp.status() >= 400) return `HTTP ${resp.status()}`;
+    await page.waitForFunction(() => (document.body?.innerText || "").trim().length > 20, null, { timeout: 4000 }).catch(() => {}); // let a slow single-page app render first
     const i = await page.evaluate(() => {
         const t = (document.body?.innerText || "").trim();
         return { len: t.length, head: t.slice(0, 300).toLowerCase(), title: document.title.toLowerCase(), media: document.querySelectorAll("img,svg,canvas,video").length };
@@ -257,7 +258,7 @@ app.post("/api/capture", async (req, res) => {
     res.on("close", () => { aborted = true; });
 
     let browser = null, ctxs = {}, session = null, created = false, failed = true, signedOut = false;
-    let seeds = null, state, sess, live = null, liveCtx = null, mode = "fresh", ok = new Map();
+    let seeds = null, state, sess, live = null, liveCtx = null, mode = "fresh", ok = Object.assign(new Map(), { blocked: new Set() }); // blocked: hosts the page tried to load but this server may not reach
     try {
         const { url: rawUrl, login, crawl, maxPages, sessionId, keep, sections } = req.body || {};
         const secBase = Math.min(Math.max(parseInt(sections, 10) || 3, 1), 5);
@@ -308,7 +309,8 @@ app.post("/api/capture", async (req, res) => {
         for (const k of Object.keys(VIEWS)) ctxs[k] = await newCtx(browser, VIEWS[k], state, ok, sess);
         const want = crawl ? Math.min(Math.max(parseInt(maxPages, 10) || 50, 1), 100) : 1;
         const queue = [...seeds], seen = new Set(), deadline = Date.now() + Math.min(60000 + want * 40000, 3600000);
-        let idx = 0, cdp = null, withScroll = 0, flat = 0; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
+        let idx = 0, cdp = null, withScroll = 0, flat = 0;
+        const skipped = []; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
         const emulate = (v) => cdp.send("Emulation.setDeviceMetricsOverride", { width: v.w, height: v.h, deviceScaleFactor: v.dpr, mobile: !!v.mobile });
 
         while (queue.length && idx < want && !aborted && Date.now() < deadline) {
@@ -333,13 +335,13 @@ app.post("/api/capture", async (req, res) => {
                     }
                     if (await hasPassword(dp)) {
                         if (idx === 0) { if (session) session.dead = true; throw new Fatal("Signed in, but the site asked for the password again. Its login could not be carried to a new page. Enter the password again."); }
-                        send({ status: `Skipped ${path} (asks for sign-in)` });
+                        send({ status: `Skipped ${path} (asks for sign-in)` }); skipped.push(`${path}: asks for sign-in`);
                         if (own) await dp.close();
                         continue;
                     }
                 }
                 const bad = await isBad(dp, resp);
-                if (bad) { send({ status: `Skipped ${path} (${bad})` }); if (own) await dp.close(); continue; }
+                if (bad) { send({ status: `Skipped ${path} (${bad})` }); skipped.push(`${path}: ${bad}`); if (own) await dp.close(); continue; }
                 if (crawl) for (const l of await links(dp, origin)) if (!seen.has(l) && !queue.includes(l)) queue.push(l);
                 const title = (await dp.title().catch(() => "")).trim().slice(0, 80);
                 const secN = idx < 12 ? secBase : Math.min(secBase, 2); // keep memory sane on big crawls
@@ -365,12 +367,15 @@ app.post("/api/capture", async (req, res) => {
                 idx++;
             } catch (e) {
                 if (e instanceof Fatal) throw e;
-                send({ status: `Skipped ${path} (${String(e.message).split("\n")[0].slice(0, 80)})` });
+                send({ status: `Skipped ${path} (${String(e.message).split("\n")[0].slice(0, 80)})` }); skipped.push(`${path}: ${String(e.message).split("\n")[0].slice(0, 80)}`);
                 if (own && dp) await dp.close().catch(() => {});
                 if (mode === "live" && cdp) await emulate(VIEWS.desktop).catch(() => {});
             }
         }
-        if (idx === 0) throw new Fatal("No usable pages found. Everything looked like an error or blank page.");
+        if (idx === 0) { // say exactly why, not just "nothing worked"
+            const blk = [...(ok.blocked || [])].slice(0, 3).join(", ");
+            throw new Fatal(`No usable pages found. ${skipped.slice(0, 3).join("; ") || "Nothing could be opened."}${blk ? ` The site tried to load data from ${blk}, which this server cannot reach (a local or LAN address). Use a server on your own network, or put that service online.` : ""}`);
+        }
         send({ progress: { done: idx, total: idx } });
         if (secBase > 1) send({ note: `Scroll sections: ${withScroll} page${withScroll === 1 ? "" : "s"} scrolled, ${flat} fit on one screen.` });
 

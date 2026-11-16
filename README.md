@@ -81,6 +81,11 @@ The container installs Chromium. Free plans sleep when idle and have little memo
 
 ## Troubleshooting
 
+**"No usable pages found"**
+- The message lists why each page was skipped (error page, blank page, asks for sign-in).
+- If it names an address like `192.168.0.159:5000`, the site loads its data from your home network. A hosted server cannot reach that, so the page renders blank. Capture it with the server on your computer.
+- A hosted server can only open sites that are reachable from the internet. Your own `localhost` and LAN sites need the server on your computer.
+
 **"Failed to fetch" or the server shows a red dot**
 - The Capture tab shows what is wrong. If it says the server answered but blocks this website, set `ALLOWED_ORIGINS` on the server to exactly the address in your browser bar, for example `https://mockup-studio.vercel.app`, with no slash at the end. Render redeploys after you save.
 - Vercel gives each project several addresses, and each deployment has its own. For preview addresses, add a pattern that includes your team name, such as `https://mockup-studio-*-your-team.vercel.app`. Never use `https://*.vercel.app`.
