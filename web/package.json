@@ -1,11 +1,12 @@
 {
   "name": "mockup-studio-web",
   "private": true,
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "bump": "npm version patch --no-git-tag-version"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

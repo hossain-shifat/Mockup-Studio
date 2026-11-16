@@ -11,5 +11,3 @@ services:
     envVars:
       - key: ALLOWED_ORIGINS   # your Vercel address, e.g. https://mockup-studio.vercel.app
         sync: false
-      - key: ACCESS_KEY        # a long random secret; also type it into the studio
-        sync: false

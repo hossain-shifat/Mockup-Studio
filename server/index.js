@@ -10,7 +10,6 @@ const { chromium } = require("playwright-core");
 const PORT = process.env.PORT || 5050;
 const VERSION = require("./package.json").version;
 const HOST = process.env.HOST || "127.0.0.1"; // 0.0.0.0 inside a container
-const KEY = process.env.ACCESS_KEY || ""; // optional shared secret for a public server
 const ALLOW_LOCAL = process.env.ALLOW_LOCAL === "1" || process.argv.includes("--local");
 const IDLE_MS = parseInt(process.env.SESSION_IDLE_MS || "600000", 10); // sign out after 10 idle minutes
 const META = [/^169\.254\./, /^fe80:/i, /^fd00:ec2:/i, /^100\.100\.100\.200$/, /^0\./];
@@ -40,7 +39,7 @@ async function guard(raw) {
     for (const { address: a } of addrs) {
         if (META.some((r) => r.test(a))) throw new Fatal("Blocked: link-local or metadata address.");
         if (PRIV.some((r) => r.test(a))) {
-            if (!ALLOW_LOCAL) throw new Fatal("Local and LAN addresses are disabled. Start server with --local (npm run dev).");
+            if (!ALLOW_LOCAL) throw new Fatal("This server cannot reach local or LAN addresses. Use This computer in the studio and run npm run dev in the server folder.");
             priv = true;
         }
     }
@@ -213,14 +212,18 @@ async function endSession(id) {
 const endAll = () => Promise.all([...sessions.keys()].map(endSession));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, async () => { await endAll(); process.exit(0); });
 
-const authed = (req) => {
-    if (!KEY) return true;
-    const got = Buffer.from(String(req.headers["x-access-key"] ?? req.body?.key ?? "")), want = Buffer.from(KEY);
-    return got.length === want.length && crypto.timingSafeEqual(got, want);
+// a hosted server has no password, so each address gets a fair share (local mode is unlimited)
+const hits = new Map();
+const limited = (ip) => {
+    const now = Date.now(), arr = (hits.get(ip) || []).filter((t) => now - t < 3600000);
+    arr.push(now); hits.set(ip, arr);
+    if (hits.size > 1000) for (const [k, v] of hits) if (!v.some((t) => now - t < 3600000)) hits.delete(k);
+    return arr.length > 40;
 };
 
 let busy = 0;
 const app = express();
+app.set("trust proxy", 1); // behind Render's proxy: real client address
 // Only listed origins may call this server from a browser (the Vercel site + local dev). Set ALLOWED_ORIGINS=https://your-app.vercel.app
 const ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174").split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean);
 // an entry may contain * for one label, e.g. https://mockup-studio-*-your-team.vercel.app (never use https://*.vercel.app)
@@ -230,7 +233,7 @@ app.use((req, res, next) => {
     if (o) {
         if (!originOk(o)) { console.warn(`[cors] blocked origin ${o}. Add it to ALLOWED_ORIGINS.`); return res.status(403).json({ error: "Origin not allowed" }); }
         res.setHeader("Access-Control-Allow-Origin", o); res.setHeader("Vary", "Origin");
-        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Access-Key");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type");
         res.setHeader("Access-Control-Allow-Private-Network", "true"); // https site -> localhost server
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -241,15 +244,14 @@ app.use(express.json({ limit: "20kb" }));
 app.get("/health", (req, res) => res.json({ ok: true, version: VERSION })); // platform health check
 
 app.post("/api/session/end", async (req, res) => {
-    if (!authed(req)) return res.status(401).json({ error: "Access key required" });
     res.json({ signedOut: await endSession(String(req.body?.sessionId || "")) });
 });
 
 app.post("/api/capture", async (req, res) => {
-    if (!authed(req)) return res.status(401).json({ error: "Access key required" });
     res.setHeader("Content-Type", "application/x-ndjson");
     const send = (o) => res.write(JSON.stringify(o) + "\n");
     if (busy >= 2) { send({ error: "Server busy. Try again in a moment." }); return res.end(); }
+    if (!ALLOW_LOCAL && limited(req.ip)) { send({ error: "Too many captures from your address this hour. Try again later." }); return res.end(); }
     busy++;
     let aborted = false; // client pressed Stop or closed the tab
     res.on("close", () => { aborted = true; });

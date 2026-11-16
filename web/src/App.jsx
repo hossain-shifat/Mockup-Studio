@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Undo2, Redo2, Download, Save, Camera, LayoutTemplate, Layers, Palette, Copy, Trash2, ArrowUp, ArrowDown, Upload, RotateCcw, Loader2, Check, Plus, Minus, Maximize, Sparkles, Mail, Lock, Link2, Eye, EyeOff, Square, Globe, LayoutGrid, ArrowLeft, Server, KeyRound } from "lucide-react";
+import { Undo2, Redo2, Download, Save, Camera, LayoutTemplate, Layers, Palette, Copy, Trash2, ArrowUp, ArrowDown, Upload, RotateCcw, Loader2, Check, Plus, Minus, Maximize, Sparkles, Mail, Lock, Link2, Eye, EyeOff, Square, Globe, LayoutGrid, ArrowLeft } from "lucide-react";
 import { DEVICES, drawScene, hitTest, preload } from "./render";
 import { makeZip, zipStream } from "./zip";
 import { generate } from "./auto";
@@ -11,6 +11,8 @@ const VERSION = typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__
 const SHA = typeof __BUILD_SHA__ === "undefined" ? "dev" : __BUILD_SHA__;
 const BUILD_DATE = typeof __BUILD_DATE__ === "undefined" ? "" : __BUILD_DATE__;
 const REPO = "hossain-shifat/Mockup-Studio";
+// localhost, LAN and single-word hosts can only be reached by the server on this computer
+const isLocalAddr = (u) => { try { const t = u.trim(), h = new URL(/^https?:\/\//i.test(t) ? t : `http://${t}`).hostname; return !h.includes(".") || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0|\[::1\])|\.local$/i.test(h); } catch { return false; } };
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 let uid = 1;
 const mk = (device, o = {}) => ({ id: uid++, device, shot: null, x: 800, y: 500, scale: 1, rotX: 0, rotY: 0, rotZ: 0, depth: 0.18, radius: 1, frame: "#26272c", shadow: 0.55, ...o });
@@ -104,8 +106,8 @@ export default function App() {
     const [tab, setTab] = useState("capture");
     const [url, setUrl] = useState(() => lsGet("ms:url", ""));
     const [mode, setMode] = useState(() => (HOSTED ? lsGet("ms:mode", "hosted") : "local")); // capture on this computer or on the hosted server
-    const [accessKey, setAccessKey] = useState(() => lsGet("ms:key", ""));
-    const base = mode === "hosted" && HOSTED ? HOSTED.trim().replace(/\/+$/, "") : LOCAL;
+    const localAddr = isLocalAddr(url); // a local address always goes to the server on this computer
+    const base = mode === "hosted" && HOSTED && !localAddr ? HOSTED.trim().replace(/\/+$/, "") : LOCAL;
     const [srv, setSrv] = useState({ state: "checking", version: "" });
     const [latest, setLatest] = useState("");
     const [cap, setCap] = useState({ busy: false, msg: "", done: 0, total: 0, error: null, note: "", scrollNote: "" });
@@ -124,10 +126,10 @@ export default function App() {
     const [asZip, setAsZip] = useState(true);
     const [sessionInfo, setSessionInfo] = useState(null); // open sign-in kept on the capture server
     const [keepIn, setKeepIn] = useState(true);
-    const sessRef = useRef(null), baseRef = useRef(""), keyRef = useRef("");
-    sessRef.current = sessionInfo; baseRef.current = base; keyRef.current = accessKey;
+    const sessRef = useRef(null);
+    sessRef.current = sessionInfo;
     useEffect(() => { // closing the studio tab ends the sign-in on the site
-        const f = () => { const id = sessRef.current?.id; if (id) navigator.sendBeacon(`${baseRef.current}/api/session/end`, new Blob([JSON.stringify({ sessionId: id, key: keyRef.current })], { type: "application/json" })); };
+        const f = () => { const s = sessRef.current; if (s) navigator.sendBeacon(`${s.base}/api/session/end`, new Blob([JSON.stringify({ sessionId: s.id })], { type: "application/json" })); };
         window.addEventListener("pagehide", f); return () => window.removeEventListener("pagehide", f);
     }, []);
     const [zoom, setZoom] = useState(0.5);
@@ -141,14 +143,15 @@ export default function App() {
     const cv = useRef(null), wrap = useRef(null), drag = useRef(null);
     const docRef = useRef(doc); docRef.current = doc;
     const past = useRef([]), fut = useRef([]);
+    useEffect(() => { try { localStorage.removeItem("ms:key"); } catch { /* ignore */ } }, []); // the access key feature is gone
     useEffect(() => { document.fonts?.ready.then(() => setTick((t) => t + 1)); }, []); // redraw once web fonts are ready
-    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); localStorage.setItem("ms:mode", mode); localStorage.setItem("ms:key", accessKey); } catch { /* private mode */ } }, [login.email, login.url, url, mode, accessKey]);
+    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); localStorage.setItem("ms:mode", mode); } catch { /* private mode */ } }, [login.email, login.url, url, mode]);
     useEffect(() => { // is the capture server reachable? A sleeping hosted server gets about a minute to wake.
         let dead = false; const ac = new AbortController();
         (async () => {
             setSrv({ state: "checking", version: "" });
             let reached = false;
-            for (let i = 0; i < (mode === "hosted" ? 12 : 1) && !dead; i++) {
+            for (let i = 0; i < (base !== LOCAL ? 12 : 1) && !dead; i++) {
                 try {
                     const r = await fetch(`${base}/health`, { signal: ac.signal });
                     if (r.ok) { const d = await r.json(); if (!dead) setSrv({ state: "online", version: d.version || "" }); return; }
@@ -156,13 +159,13 @@ export default function App() {
                     if (dead) return;
                     try { await fetch(`${base}/health`, { mode: "no-cors", signal: ac.signal }); reached = true; } catch { /* nothing answered */ }
                 }
-                if (mode === "local") break;
+                if (base === LOCAL) break;
                 await new Promise((ok) => setTimeout(ok, 5000));
             }
             if (!dead) setSrv({ state: reached ? "blocked" : "offline", version: "" });
         })();
         return () => { dead = true; ac.abort(); };
-    }, [base, mode]);
+    }, [base]);
     useEffect(() => { // is there newer code on GitHub than this build?
         if (SHA === "dev") return;
         fetch(`https://api.github.com/repos/${REPO}/commits/HEAD`, { headers: { Accept: "application/vnd.github+json" } }).then((r) => (r.ok ? r.json() : null)).then((d) => d?.sha && setLatest(d.sha.slice(0, 7))).catch(() => {});
@@ -228,13 +231,13 @@ export default function App() {
     // "Failed to fetch" tells nothing: find out whether the server is down, asleep, or refusing this website
     const diagnose = async () => {
         try { await fetch(`${base}/health`, { mode: "no-cors" }); return `The server answered but blocked this website. On the server set ALLOWED_ORIGINS to exactly ${location.origin} (no slash at the end), then retry.`; }
-        catch { return mode === "hosted" ? "Cannot reach the hosted server. A free instance sleeps when idle and needs about a minute to wake. Try again shortly." : "Cannot reach the server on this computer. Start it with npm run dev in the server folder. If the browser asks to allow local network access, allow it."; }
+        catch { return base !== LOCAL ? "Cannot reach the hosted server. A free instance sleeps when idle and needs about a minute to wake. Try again shortly." : "Cannot reach the server on this computer. Start it with npm run dev in the server folder. If the browser asks to allow local network access, allow it."; }
     };
     const endSession = async () => {
         const id = sessionInfo?.id; if (!id) return;
         setSessionInfo(null);
         try {
-            const r = await fetch(`${base}/api/session/end`, { method: "POST", headers: { "Content-Type": "application/json", ...(accessKey ? { "X-Access-Key": accessKey } : {}) }, body: JSON.stringify({ sessionId: id }) });
+            const r = await fetch(`${sessionInfo.base ?? base}/api/session/end`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: id }) });
             const d = await r.json();
             setCap((s) => ({ ...s, error: null, note: d.signedOut ? "Signed out of the site." : "Session closed. No sign-out button was found on the site." }));
         } catch { setCap((s) => ({ ...s, error: "Could not reach the capture server to sign out." })); }
@@ -247,8 +250,8 @@ export default function App() {
         const ac = new AbortController(); abortRef.current = ac;
         try { path = new URL(url).pathname; } catch { /* server reports invalid URL */ }
         try {
-            const res = await fetch(`${base}/api/capture`, { method: "POST", signal: ac.signal, headers: { "Content-Type": "application/json", ...(accessKey ? { "X-Access-Key": accessKey } : {}) }, body: JSON.stringify({ url: target, sessionId: sessionInfo?.id, keep: keepIn, sections, crawl, maxPages, login: login.password ? { email: login.email, password: login.password, url: login.url || undefined } : undefined }) });
-            if (!res.ok || !res.body) throw new Error(res.status === 401 ? "The capture server needs its access key. Enter it under Capture server." : "Capture server not reachable. Check the Capture server address, and that it is running.");
+            const res = await fetch(`${base}/api/capture`, { method: "POST", signal: ac.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: target, sessionId: sessionInfo?.base === base ? sessionInfo.id : undefined, keep: keepIn, sections, crawl, maxPages, login: login.password ? { email: login.email, password: login.password, url: login.url || undefined } : undefined }) });
+            if (!res.ok || !res.body) throw new Error("Capture server not reachable. Check the address and that the server is running.");
             const rd = res.body.getReader(), dec = new TextDecoder(); let buf = "";
             for (;;) {
                 const { done, value } = await rd.read(); if (done) break;
@@ -260,7 +263,7 @@ export default function App() {
                     if (m.error) throw new Error(m.error);
                     if (m.status) setCap((s) => ({ ...s, msg: m.status }));
                     if (m.progress) setCap((s) => ({ ...s, done: m.progress.done, total: m.progress.total }));
-                    if (m.session !== undefined) setSessionInfo(m.session ? { id: m.session.id, as: m.session.as } : null);
+                    if (m.session !== undefined) setSessionInfo(m.session ? { id: m.session.id, as: m.session.as, base } : null);
                     if (m.note) setCap((s) => ({ ...s, scrollNote: m.note }));
                     if (m.keptOpen) setCap((s) => ({ ...s, note: "Still signed in, so the next capture needs no login. Press Sign out when you are finished." }));
                     if (m.signedOut !== undefined) setCap((s) => ({ ...s, note: m.signedOut ? "Signed out of the site. Password cleared." : "No sign-out button found. The session was discarded here; sign out of the site yourself if needed." }));
@@ -429,10 +432,10 @@ export default function App() {
                                         </div>
                                     </div>
                                 )}
-                                {mode === "hosted" && HOSTED && <Field icon={KeyRound} label="Access key" type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder="Required for the hosted server" autoComplete="off" />}
+                                {HOSTED && mode === "hosted" && localAddr && <p className="text-[11px] text-base-content/60 leading-relaxed">This is a local address, so this capture runs on your computer. Start it with npm run dev in the server folder.</p>}
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
                                     <span className={`h-2 w-2 rounded-full ${srv.state === "online" ? "bg-success" : srv.state === "checking" ? "bg-warning animate-pulse" : "bg-error"}`} />
-                                    <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (mode === "hosted" ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : mode === "local" ? "Server not running. Start it with npm run dev in the server folder." : "Hosted server not reachable. Check the address and that it is running."}</span>
+                                    <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (base !== LOCAL ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : base === LOCAL ? "Server not running. Start it with npm run dev in the server folder." : "Hosted server not reachable. Check the address and that it is running."}</span>
                                     {srv.state === "online" && srv.version && srv.version !== VERSION && <span className="text-warning">Server is v{srv.version}, studio is v{VERSION}</span>}
                                 </div>
                             </div>

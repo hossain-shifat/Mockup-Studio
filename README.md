@@ -67,13 +67,15 @@ After you change an environment variable in Vercel, redeploy so it takes effect.
 ## Host the capture server (optional, auto-deploys from GitHub)
 
 A hosted server captures **public** websites only. It cannot reach your localhost or home network, so keep running the server on your PC for those.
-The studio has a **Capture server** field, so one deployed UI can use either.
+The studio picks the right server for you.
 
 On Render:
 1. In Render choose **New, then Blueprint**, connect this GitHub repository, and pick it. Render reads `render.yaml`.
-2. When asked, set `ALLOWED_ORIGINS` to your exact Vercel address and `ACCESS_KEY` to a long random secret.
+2. When asked, set `ALLOWED_ORIGINS` to your exact Vercel address.
 3. Deploy. Render now rebuilds the server on every push to GitHub, just as Vercel does for the UI.
-4. In the studio, open the Capture tab, put the Render address (for example `https://mockup-studio-server.onrender.com`) under **Capture server**, and your secret under **Access key**.
+4. In Vercel add the environment variable `VITE_CAPTURE_URL` with the Render address and redeploy. In the studio's Capture tab choose **Hosted server**. Local and LAN addresses always use your computer automatically.
+
+The hosted server has no password. It captures public websites only, accepts calls only from your `ALLOWED_ORIGINS`, runs two captures at a time, and allows 40 captures per address per hour.
 
 The container installs Chromium. Free plans sleep when idle and have little memory, so crawls can be slow or run out of memory. A paid instance is more reliable.
 
@@ -83,7 +85,6 @@ The container installs Chromium. Free plans sleep when idle and have little memo
 - The Capture tab shows what is wrong. If it says the server answered but blocks this website, set `ALLOWED_ORIGINS` on the server to exactly the address in your browser bar, for example `https://mockup-studio.vercel.app`, with no slash at the end. Render redeploys after you save.
 - Vercel gives each project several addresses, and each deployment has its own. For preview addresses, add a pattern that includes your team name, such as `https://mockup-studio-*-your-team.vercel.app`. Never use `https://*.vercel.app`.
 - A free Render server sleeps when idle and needs about a minute to wake.
-- "Wrong access key" means the key in the studio differs from `ACCESS_KEY` on the server.
 - For the server on your own computer, start it with `npm run dev` in `server`. Allow the local network prompt if your browser shows one.
 - The server logs `[cors] blocked origin …` when it refuses a website. Read it in the Render Logs tab or your terminal.
 
@@ -95,7 +96,6 @@ The container installs Chromium. Free plans sleep when idle and have little memo
 | `ALLOWED_ORIGINS` | server | localhost 5173 and 5174 | Comma-separated origins allowed to call the server. |
 | `PORT` | server | `5050` | Server port. |
 | `HOST` | server | `127.0.0.1` | Bind address. The Docker image uses `0.0.0.0`. |
-| `ACCESS_KEY` | server | empty | If set, requests must send this key. Use it on any public server. |
 | `--local` flag or `ALLOW_LOCAL=1` | server | on with `npm run dev` | Allow capturing localhost and LAN addresses. |
 | `BROWSER` | server | `msedge`, `chrome`, `chromium` | Browser to launch. The Docker image uses `chromium`. |
 | `SESSION_IDLE_MS` | server | `600000` | Sign out after this many idle milliseconds. |

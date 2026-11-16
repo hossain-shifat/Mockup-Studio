@@ -1,11 +1,12 @@
 {
   "name": "mockup-studio-server",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js --local",
-    "local": "node index.js --local"
+    "local": "node index.js --local",
+    "bump": "npm version patch --no-git-tag-version"
   },
   "dependencies": {
     "express": "^5.2.1",
