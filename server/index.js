@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { chromium } = require("playwright-core");
 
 const PORT = process.env.PORT || 5050;
+const VERSION = require("./package.json").version;
 const HOST = process.env.HOST || "127.0.0.1"; // 0.0.0.0 inside a container
 const KEY = process.env.ACCESS_KEY || ""; // optional shared secret for a public server
 const ALLOW_LOCAL = process.env.ALLOW_LOCAL === "1" || process.argv.includes("--local");
@@ -221,11 +222,13 @@ const authed = (req) => {
 let busy = 0;
 const app = express();
 // Only listed origins may call this server from a browser (the Vercel site + local dev). Set ALLOWED_ORIGINS=https://your-app.vercel.app
-const ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174").split(",").map((o) => o.trim()).filter(Boolean);
+const ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174").split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean);
+// an entry may contain * for one label, e.g. https://mockup-studio-*-your-team.vercel.app (never use https://*.vercel.app)
+const originOk = (o) => ORIGINS.some((p) => (p.includes("*") ? new RegExp("^" + p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[a-z0-9-]+") + "$", "i").test(o) : p === o));
 app.use((req, res, next) => {
     const o = req.headers.origin;
     if (o) {
-        if (!ORIGINS.includes(o)) return res.status(403).json({ error: "Origin not allowed" });
+        if (!originOk(o)) { console.warn(`[cors] blocked origin ${o}. Add it to ALLOWED_ORIGINS.`); return res.status(403).json({ error: "Origin not allowed" }); }
         res.setHeader("Access-Control-Allow-Origin", o); res.setHeader("Vary", "Origin");
         res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS"); res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Access-Key");
         res.setHeader("Access-Control-Allow-Private-Network", "true"); // https site -> localhost server
@@ -235,7 +238,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "20kb" }));
 
-app.get("/health", (req, res) => res.json({ ok: true })); // platform health check
+app.get("/health", (req, res) => res.json({ ok: true, version: VERSION })); // platform health check
 
 app.post("/api/session/end", async (req, res) => {
     if (!authed(req)) return res.status(401).json({ error: "Access key required" });

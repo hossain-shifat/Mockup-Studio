@@ -77,6 +77,16 @@ On Render:
 
 The container installs Chromium. Free plans sleep when idle and have little memory, so crawls can be slow or run out of memory. A paid instance is more reliable.
 
+## Troubleshooting
+
+**"Failed to fetch" or the server shows a red dot**
+- The Capture tab shows what is wrong. If it says the server answered but blocks this website, set `ALLOWED_ORIGINS` on the server to exactly the address in your browser bar, for example `https://mockup-studio.vercel.app`, with no slash at the end. Render redeploys after you save.
+- Vercel gives each project several addresses, and each deployment has its own. For preview addresses, add a pattern that includes your team name, such as `https://mockup-studio-*-your-team.vercel.app`. Never use `https://*.vercel.app`.
+- A free Render server sleeps when idle and needs about a minute to wake.
+- "Wrong access key" means the key in the studio differs from `ACCESS_KEY` on the server.
+- For the server on your own computer, start it with `npm run dev` in `server`. Allow the local network prompt if your browser shows one.
+- The server logs `[cors] blocked origin …` when it refuses a website. Read it in the Render Logs tab or your terminal.
+
 ## Configuration
 
 | Variable | Where | Default | Purpose |

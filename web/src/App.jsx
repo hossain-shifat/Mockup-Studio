@@ -5,7 +5,12 @@ import { makeZip, zipStream } from "./zip";
 import { generate } from "./auto";
 
 // ── model ────────────────────────────────────────────────────────────────────
-const API = import.meta.env.VITE_CAPTURE_URL || ""; // empty in dev (Vite proxy); set on Vercel to the capture server address
+const HOSTED = import.meta.env.VITE_CAPTURE_URL || ""; // hosted capture server, set in Vercel (never shown in the UI)
+const LOCAL = import.meta.env.DEV ? "" : "http://localhost:5050"; // the server on this computer
+const VERSION = typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__;
+const SHA = typeof __BUILD_SHA__ === "undefined" ? "dev" : __BUILD_SHA__;
+const BUILD_DATE = typeof __BUILD_DATE__ === "undefined" ? "" : __BUILD_DATE__;
+const REPO = "hossain-shifat/Mockup-Studio";
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 let uid = 1;
 const mk = (device, o = {}) => ({ id: uid++, device, shot: null, x: 800, y: 500, scale: 1, rotX: 0, rotY: 0, rotZ: 0, depth: 0.18, radius: 1, frame: "#26272c", shadow: 0.55, ...o });
@@ -53,6 +58,13 @@ const Field = ({ icon: I, label, right, ...p }) => (
         </span>
     </label>
 );
+// fully rounded switch with a white knob
+const Toggle = ({ checked, onChange }) => (
+    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange({ target: { checked: !checked } })}
+        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none ${checked ? "bg-primary" : "bg-base-content/25"}`}>
+        <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : "translate-x-0"}`} />
+    </button>
+);
 const Section = ({ title, children }) => (
     <div className="space-y-2">
         <h4 className="text-[11px] font-semibold uppercase tracking-wider text-base-content/50">{title}</h4>
@@ -90,10 +102,12 @@ export default function App() {
     const [sel, setSel] = useState(null);
     const [shots, setShots] = useState([]);
     const [tab, setTab] = useState("capture");
-    const [url, setUrl] = useState(() => lsGet("ms:url", "http://localhost:5173"));
-    const [server, setServer] = useState(() => lsGet("ms:server", API)); // which capture server to use: this PC or a hosted one
+    const [url, setUrl] = useState(() => lsGet("ms:url", ""));
+    const [mode, setMode] = useState(() => (HOSTED ? lsGet("ms:mode", "hosted") : "local")); // capture on this computer or on the hosted server
     const [accessKey, setAccessKey] = useState(() => lsGet("ms:key", ""));
-    const base = (server || API).trim().replace(/\/+$/, "");
+    const base = mode === "hosted" && HOSTED ? HOSTED.trim().replace(/\/+$/, "") : LOCAL;
+    const [srv, setSrv] = useState({ state: "checking", version: "" });
+    const [latest, setLatest] = useState("");
     const [cap, setCap] = useState({ busy: false, msg: "", done: 0, total: 0, error: null, note: "", scrollNote: "" });
     const [login, setLogin] = useState(() => ({ open: !!lsGet("ms:email", ""), email: lsGet("ms:email", ""), password: "", url: lsGet("ms:loginUrl", "") })); // email + login page remembered; password never saved
     const [crawl, setCrawl] = useState(true);
@@ -128,7 +142,31 @@ export default function App() {
     const docRef = useRef(doc); docRef.current = doc;
     const past = useRef([]), fut = useRef([]);
     useEffect(() => { document.fonts?.ready.then(() => setTick((t) => t + 1)); }, []); // redraw once web fonts are ready
-    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); localStorage.setItem("ms:server", server); localStorage.setItem("ms:key", accessKey); } catch { /* private mode */ } }, [login.email, login.url, url, server, accessKey]);
+    useEffect(() => { try { localStorage.setItem("ms:email", login.email); localStorage.setItem("ms:loginUrl", login.url); localStorage.setItem("ms:url", url); localStorage.setItem("ms:mode", mode); localStorage.setItem("ms:key", accessKey); } catch { /* private mode */ } }, [login.email, login.url, url, mode, accessKey]);
+    useEffect(() => { // is the capture server reachable? A sleeping hosted server gets about a minute to wake.
+        let dead = false; const ac = new AbortController();
+        (async () => {
+            setSrv({ state: "checking", version: "" });
+            let reached = false;
+            for (let i = 0; i < (mode === "hosted" ? 12 : 1) && !dead; i++) {
+                try {
+                    const r = await fetch(`${base}/health`, { signal: ac.signal });
+                    if (r.ok) { const d = await r.json(); if (!dead) setSrv({ state: "online", version: d.version || "" }); return; }
+                } catch {
+                    if (dead) return;
+                    try { await fetch(`${base}/health`, { mode: "no-cors", signal: ac.signal }); reached = true; } catch { /* nothing answered */ }
+                }
+                if (mode === "local") break;
+                await new Promise((ok) => setTimeout(ok, 5000));
+            }
+            if (!dead) setSrv({ state: reached ? "blocked" : "offline", version: "" });
+        })();
+        return () => { dead = true; ac.abort(); };
+    }, [base, mode]);
+    useEffect(() => { // is there newer code on GitHub than this build?
+        if (SHA === "dev") return;
+        fetch(`https://api.github.com/repos/${REPO}/commits/HEAD`, { headers: { Accept: "application/vnd.github+json" } }).then((r) => (r.ok ? r.json() : null)).then((d) => d?.sha && setLatest(d.sha.slice(0, 7))).catch(() => {});
+    }, []);
 
     // history
     const mark = () => { past.current.push(docRef.current); if (past.current.length > 80) past.current.shift(); fut.current = []; };
@@ -187,6 +225,11 @@ export default function App() {
     const pick = (a) => { mark(); setDoc(a.doc); setName(a.name); setSel(null); setView("editor"); setTimeout(() => fit(a.doc.size), 0); };
 
     // capture
+    // "Failed to fetch" tells nothing: find out whether the server is down, asleep, or refusing this website
+    const diagnose = async () => {
+        try { await fetch(`${base}/health`, { mode: "no-cors" }); return `The server answered but blocked this website. On the server set ALLOWED_ORIGINS to exactly ${location.origin} (no slash at the end), then retry.`; }
+        catch { return mode === "hosted" ? "Cannot reach the hosted server. A free instance sleeps when idle and needs about a minute to wake. Try again shortly." : "Cannot reach the server on this computer. Start it with npm run dev in the server folder. If the browser asks to allow local network access, allow it."; }
+    };
     const endSession = async () => {
         const id = sessionInfo?.id; if (!id) return;
         setSessionInfo(null);
@@ -234,7 +277,12 @@ export default function App() {
         } catch (e) {
             if (e.name === "AbortError") { setCap((s) => ({ ...s, busy: false })); await runAuto(got, seed); return; } // Stop: keep what we have
             if (/expired|asked for the password/i.test(e.message)) setSessionInfo(null);
-            setCap((s) => ({ ...s, busy: false, error: e.message }));
+            let msg = e.message;
+            if (e instanceof TypeError) {
+                if (got.length) { msg = `The connection dropped after ${got.length} screenshots (a small hosted server can run out of memory). What was captured is kept. Lower the page limit or sections and retry.`; await runAuto(got, seed); }
+                else msg = await diagnose();
+            }
+            setCap((s) => ({ ...s, busy: false, error: msg }));
         }
     };
     const upload = async (e) => {
@@ -329,6 +377,8 @@ export default function App() {
                 <div className="font-display font-bold text-lg tracking-tight flex items-center gap-2">
                     <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary" />Mockup Studio
                 </div>
+                <span className="rounded-md bg-base-300 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-base-content/60" title={`Studio v${VERSION} · build ${SHA}${BUILD_DATE ? ` · ${BUILD_DATE}` : ""}`}>v{VERSION} · {SHA}</span>
+                {latest && SHA !== "dev" && latest !== SHA && <span className="rounded-md bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning" title={`Newest code on GitHub is ${latest}. Vercel is still deploying it, or redeploy. Then reload this page.`}>Update available</span>}
                 <input value={name} onChange={(e) => setName(e.target.value)} className="input input-sm input-ghost w-56 ml-4" aria-label="Project name" />
                 <div className="ml-auto flex items-center gap-1">
                     <Btn icon={LayoutGrid} disabled={!autos.length} onClick={() => setView(view === "gallery" ? "editor" : "gallery")}>{view === "gallery" ? "Editor" : `Gallery${autos.length ? ` (${autos.length})` : ""}`}</Btn>
@@ -368,36 +418,49 @@ export default function App() {
                     {tab === "capture" && (<>
                         <div>
                             <Head>Website address</Head>
-                            <Field icon={Globe} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !cap.busy && capture()} placeholder="https://… or http://localhost:5173" spellCheck={false} />
+                            <Field icon={Globe} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !cap.busy && capture()} placeholder="example.com" spellCheck={false} />
                             <div className="mt-3 space-y-2.5">
-                                <Field icon={Server} label="Capture server" value={server} onChange={(e) => setServer(e.target.value)} placeholder={API || "http://localhost:5050"} spellCheck={false} />
-                                <Field icon={KeyRound} label="Access key (hosted server only)" type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder="Leave empty for your own PC" autoComplete="off" />
+                                {HOSTED && (
+                                    <div className="space-y-1.5">
+                                        <span className="text-[11px] font-medium text-base-content/60">Capture from</span>
+                                        <div className="grid grid-cols-2 gap-1.5">
+                                            <button onClick={() => setMode("local")} className={`btn btn-sm ${mode === "local" ? "btn-primary" : "btn-outline"}`}>This computer</button>
+                                            <button onClick={() => setMode("hosted")} className={`btn btn-sm ${mode === "hosted" ? "btn-primary" : "btn-outline"}`}>Hosted server</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {mode === "hosted" && HOSTED && <Field icon={KeyRound} label="Access key" type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder="Required for the hosted server" autoComplete="off" />}
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                                    <span className={`h-2 w-2 rounded-full ${srv.state === "online" ? "bg-success" : srv.state === "checking" ? "bg-warning animate-pulse" : "bg-error"}`} />
+                                    <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (mode === "hosted" ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : mode === "local" ? "Server not running. Start it with npm run dev in the server folder." : "Hosted server not reachable. Check the address and that it is running."}</span>
+                                    {srv.state === "online" && srv.version && srv.version !== VERSION && <span className="text-warning">Server is v{srv.version}, studio is v{VERSION}</span>}
+                                </div>
                             </div>
                             <div className="mt-4 rounded-box border border-base-300 bg-base-100/50 p-3 space-y-3">
                                 <label className="flex items-center justify-between cursor-pointer">
                                     <span className="text-sm font-medium">Sign in to the site</span>
-                                    <input type="checkbox" className="toggle toggle-sm toggle-primary" checked={login.open} onChange={(e) => setLogin({ ...login, open: e.target.checked })} />
+                                    <Toggle checked={login.open} onChange={(e) => setLogin({ ...login, open: e.target.checked })} />
                                 </label>
                                 {login.open && (
                                     <div className="space-y-2.5">
                                         <Field icon={Mail} label="Email or username" value={login.email} onChange={(e) => setLogin({ ...login, email: e.target.value })} placeholder="you@example.com" autoComplete="off" spellCheck={false} />
                                         <Field icon={Lock} label="Password" type={showPw ? "text" : "password"} value={login.password} onChange={(e) => setLogin({ ...login, password: e.target.value })} onKeyDown={(e) => e.key === "Enter" && !cap.busy && capture()} placeholder={sessionInfo ? "Not needed while signed in" : "Enter password"} autoComplete="new-password"
                                             right={<button type="button" onClick={() => setShowPw((v) => !v)} aria-label={showPw ? "Hide password" : "Show password"} title={showPw ? "Hide password" : "Show password"} className="text-base-content/50 hover:text-base-content cursor-pointer">{showPw ? <EyeOff size={15} /> : <Eye size={15} />}</button>} />
-                                        <Field icon={Link2} label="Login page (optional)" value={login.url} onChange={(e) => setLogin({ ...login, url: e.target.value })} placeholder="http://localhost:5173/login" spellCheck={false} />
+                                        <Field icon={Link2} label="Login page (optional)" value={login.url} onChange={(e) => setLogin({ ...login, url: e.target.value })} placeholder="Only if different from the address above" spellCheck={false} />
                                         {sessionInfo && (
                                             <div className="flex items-center justify-between gap-2 rounded-md bg-success/10 px-2.5 py-2 text-xs text-success">
                                                 <span className="truncate">Signed in as {sessionInfo.as}</span>
                                                 <button onClick={endSession} className="btn btn-xs btn-ghost text-success">Sign out</button>
                                             </div>
                                         )}
-                                        <label className="flex items-center justify-between cursor-pointer text-xs"><span>Stay signed in between captures</span><input type="checkbox" className="toggle toggle-xs toggle-primary" checked={keepIn} onChange={(e) => setKeepIn(e.target.checked)} /></label>
+                                        <label className="flex items-center justify-between cursor-pointer text-xs"><span>Stay signed in between captures</span><Toggle checked={keepIn} onChange={(e) => setKeepIn(e.target.checked)} /></label>
                                         <p className="text-[11px] text-base-content/50 leading-relaxed">Email is remembered here. The password is never saved or logged and is cleared after capture. You are signed out when you press Sign out, after 10 idle minutes, or when you close this tab. With the switch off, you are signed out after every capture.</p>
                                     </div>
                                 )}
                                 <div className="border-t border-base-300 pt-3 space-y-3">
                                     <label className="flex items-center justify-between cursor-pointer">
                                         <span className="text-sm font-medium">Explore every page</span>
-                                        <input type="checkbox" className="toggle toggle-sm toggle-primary" checked={crawl} onChange={(e) => setCrawl(e.target.checked)} />
+                                        <Toggle checked={crawl} onChange={(e) => setCrawl(e.target.checked)} />
                                     </label>
                                     {crawl && (
                                         <div className="space-y-2">
@@ -582,7 +645,7 @@ export default function App() {
                         <p className="text-sm tabular-nums">{Math.round(doc.size.w * outK)} × {Math.round(doc.size.h * outK)} px<span className="text-base-content/50">{fmt === "png" && bg.type === "transparent" ? " · transparent" : ""}</span></p>
                     </Section>
                     <Section title="Delivery">
-                        <label className="flex items-center justify-between cursor-pointer text-sm"><span>Pack as ZIP</span><input type="checkbox" className="toggle toggle-sm toggle-primary" checked={asZip} onChange={(e) => setAsZip(e.target.checked)} /></label>
+                        <label className="flex items-center justify-between cursor-pointer text-sm"><span>Pack as ZIP</span><Toggle checked={asZip} onChange={(e) => setAsZip(e.target.checked)} /></label>
                         <p className="text-[11px] text-base-content/50 leading-relaxed">Applies to this mockup and to Download selected. Export all is always one ZIP.</p>
                     </Section>
                     <button onClick={exportImg} className="btn btn-primary btn-sm w-full"><Download size={15} />{asZip ? "Download ZIP" : `Download ${fmt.toUpperCase()}`}</button>

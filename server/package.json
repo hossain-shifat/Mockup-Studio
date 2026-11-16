@@ -1,7 +1,14 @@
 {
   "name": "mockup-studio-server",
-  "version": "1.0.0",
+  "version": "1.4.1",
   "main": "index.js",
-  "scripts": { "start": "node index.js", "dev": "node --watch index.js --local", "local": "node index.js --local" },
-  "dependencies": { "express": "^5.2.1", "playwright-core": "^1.50.0" }
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js --local",
+    "local": "node index.js --local"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright-core": "^1.50.0"
+  }
 }
