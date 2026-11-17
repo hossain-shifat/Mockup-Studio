@@ -43,6 +43,13 @@ npm run dev
 
 Open the address Vite prints, enter a site address, and press **Capture website**.
 
+## Capturing your own local sites
+
+A hosted server cannot open `localhost` or LAN addresses. You have two ways to capture them:
+
+1. **Local capture server.** Double-click `Start-Capture-Server.bat` in the project folder. The first run asks for your Vercel address once, then installs and starts the server. Keep the window open. To start it automatically at login, press Win+R, type `shell:startup`, and put a shortcut to the `.bat` file in that folder.
+2. **Capture from your screen.** No server needed. In the Capture tab press **Share a tab**, pick the tab with your site, then press **Grab** on each page. Scroll between grabs for more sections, and tick **Same page as the last grab** to combine views. This is manual: no login, crawling or scroll automation.
+
 ## Deploy the UI to Vercel
 
 1. Push this repository to GitHub.

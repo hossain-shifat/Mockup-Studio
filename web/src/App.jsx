@@ -124,6 +124,9 @@ export default function App() {
     const [limit, setLimit] = useState(48);
     const [exp, setExp] = useState({ busy: false, done: 0, total: 0, msg: "" });
     const [asZip, setAsZip] = useState(true);
+    const [screen, setScreen] = useState({ on: false, count: 0 }); // capture from a shared browser tab, no server needed
+    const [samePage, setSamePage] = useState(false);
+    const screenRef = useRef(null);
     const [sessionInfo, setSessionInfo] = useState(null); // open sign-in kept on the capture server
     const [keepIn, setKeepIn] = useState(true);
     const sessRef = useRef(null);
@@ -228,10 +231,33 @@ export default function App() {
     const pick = (a) => { mark(); setDoc(a.doc); setName(a.name); setSel(null); setView("editor"); setTimeout(() => fit(a.doc.size), 0); };
 
     // capture
+    const stopScreen = () => { screenRef.current?.stream.getTracks().forEach((t) => t.stop()); screenRef.current = null; setScreen((s) => ({ ...s, on: false })); };
+    const startScreen = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false });
+            const v = document.createElement("video"); v.srcObject = stream; v.muted = true; await v.play();
+            stream.getVideoTracks()[0].addEventListener("ended", stopScreen);
+            screenRef.current = { stream, v, lastPage: null };
+            setScreen((s) => ({ ...s, on: true }));
+            setCap((s) => ({ ...s, error: null }));
+        } catch (e) { setCap((s) => ({ ...s, error: e.name === "NotAllowedError" ? "Screen sharing was cancelled." : `Could not start screen capture: ${e.message}` })); }
+    };
+    const grab = async () => {
+        const r = screenRef.current; if (!r || !r.v.videoWidth) return;
+        const c = document.createElement("canvas"); c.width = r.v.videoWidth; c.height = r.v.videoHeight; c.getContext("2d").drawImage(r.v, 0, 0);
+        const ar = c.width / c.height, view = ar < 0.62 ? "mobile" : ar < 0.9 ? "tablet" : "desktop"; // a narrow window becomes a phone view
+        const n = screen.count + 1, pageKey = samePage && r.lastPage ? r.lastPage : `scr-${Date.now()}`;
+        r.lastPage = pageKey;
+        const sec = shots.filter((s) => s.page === pageKey && s.view === view).length;
+        const shot = { key: `${pageKey}-${view}-${sec}`, page: pageKey, label: `Screen grab ${n} \u00b7 ${view}`, view, sec, title: `Screen ${n}`, host: "", src: c.toDataURL("image/png") };
+        const next = [...shots, shot];
+        setShots(next); setScreen((s) => ({ ...s, count: n }));
+        await runAuto(next, seed, false);
+    };
     // "Failed to fetch" tells nothing: find out whether the server is down, asleep, or refusing this website
     const diagnose = async () => {
         try { await fetch(`${base}/health`, { mode: "no-cors" }); return `The server answered but blocked this website. On the server set ALLOWED_ORIGINS to exactly ${location.origin} (no slash at the end), then retry.`; }
-        catch { return base !== LOCAL ? "Cannot reach the hosted server. A free instance sleeps when idle and needs about a minute to wake. Try again shortly." : "Cannot reach the server on this computer. Start it with npm run dev in the server folder. If the browser asks to allow local network access, allow it."; }
+        catch { return base !== LOCAL ? "Cannot reach the hosted server. A free instance sleeps when idle and needs about a minute to wake. Try again shortly." : "Cannot reach the server on this computer. Double-click Start-Capture-Server.bat in the project folder, or use Capture from your screen. If the browser asks to allow local network access, allow it."; }
     };
     const endSession = async () => {
         const id = sessionInfo?.id; if (!id) return;
@@ -435,7 +461,7 @@ export default function App() {
                                 {HOSTED && mode === "hosted" && localAddr && <p className="text-[11px] text-base-content/60 leading-relaxed">This address only exists on your own network, so the hosted server cannot open it. The capture runs on your computer: start the server there with npm run dev, or put the site online first.</p>}
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
                                     <span className={`h-2 w-2 rounded-full ${srv.state === "online" ? "bg-success" : srv.state === "checking" ? "bg-warning animate-pulse" : "bg-error"}`} />
-                                    <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (base !== LOCAL ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : base === LOCAL ? "Server not running. Start it with npm run dev in the server folder." : "Hosted server not reachable. Check the address and that it is running."}</span>
+                                    <span className="text-base-content/70">{srv.state === "online" ? `Server online${srv.version ? ` · v${srv.version}` : ""}` : srv.state === "checking" ? (base !== LOCAL ? "Checking server. A free hosted server can take about a minute to wake…" : "Checking server…") : srv.state === "blocked" ? `The server answered but blocks this website. On the server set ALLOWED_ORIGINS to ${location.origin}` : base === LOCAL ? "Server not running. Double-click Start-Capture-Server.bat in the project folder, or capture from your screen below." : "Hosted server not reachable. Check the address and that it is running."}</span>
                                     {srv.state === "online" && srv.version && srv.version !== VERSION && <span className="text-warning">Server is v{srv.version}, studio is v{VERSION}</span>}
                                 </div>
                             </div>
@@ -497,6 +523,18 @@ export default function App() {
                                 <Btn icon={Download} disabled={!autos.length || exp.busy} onClick={exportAll} className="btn-primary btn-sm">Export all ({autos.length})</Btn>
                             </div>
                             <div className="mt-2">{expBar}</div>
+                            <div className="mt-4 rounded-box border border-base-300 bg-base-100/50 p-3 space-y-2.5">
+                                <h4 className="text-sm font-medium">No server? Capture from your screen</h4>
+                                <p className="text-[11px] text-base-content/50 leading-relaxed">Works for any site on your computer, with no server at all. Open your site in another tab, share that tab, then press Grab on each page. Scroll between grabs for more sections. Make that window narrow for a phone view.</p>
+                                {!screen.on ? <Btn icon={Camera} onClick={startScreen} className="btn-outline btn-sm w-full">Share a tab</Btn> : (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <Btn icon={Camera} onClick={grab} className="btn-primary btn-sm">Grab ({screen.count})</Btn>
+                                        <Btn icon={Square} onClick={stopScreen} className="btn-outline btn-sm">Stop sharing</Btn>
+                                    </div>
+                                )}
+                                {screen.on && <label className="flex items-center justify-between cursor-pointer text-xs"><span>Same page as the last grab</span><Toggle checked={samePage} onChange={(e) => setSamePage(e.target.checked)} /></label>}
+                                {screen.count > 0 && <p className="text-xs text-base-content/70">{autos.length} mockups ready. Open the Gallery to review them.</p>}
+                            </div>
                         </div>
                         <div>
                             <div className="flex items-center justify-between mb-2"><Head>Screenshots</Head>
