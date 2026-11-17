@@ -50,6 +50,25 @@ A hosted server cannot open `localhost` or LAN addresses. You have two ways to c
 1. **Local capture server.** Double-click `Start-Capture-Server.bat` in the project folder. The first run asks for your Vercel address once, then installs and starts the server. Keep the window open. To start it automatically at login, press Win+R, type `shell:startup`, and put a shortcut to the `.bat` file in that folder.
 2. **Capture from your screen.** No server needed. In the Capture tab press **Share a tab**, pick the tab with your site, then press **Grab** on each page. Scroll between grabs for more sections, and tick **Same page as the last grab** to combine views. This is manual: no login, crawling or scroll automation.
 
+### Capturing a local site through ngrok (no capture server on your PC)
+
+A public tunnel lets the hosted server open your local site. ngrok and your site must keep running on your PC while it captures.
+
+1. Run your site, then `ngrok http 5173` (use your site's port) and copy the `https://…ngrok-free.dev` address.
+2. If your site is a Vite app, let it accept that host and route its API calls through itself, so one tunnel is enough. In its `vite.config.js`:
+
+```js
+server: {
+    allowedHosts: [".ngrok-free.dev"],
+    proxy: { "/api": "http://YOUR-LAN-IP:5000", "/stream": "http://YOUR-LAN-IP:5000" },
+},
+```
+
+3. Point the site's API address at the tunnel itself (for example `VITE_API_URL=https://YOUR-NAME.ngrok-free.dev`) and restart it. An API address like `http://192.168.x.x` cannot be reached from a hosted server and would leave every page blank.
+4. Capture the ngrok address in the studio with **Hosted server** selected. The capture server sends ngrok's skip-warning header and also clicks **Visit Site** if ngrok's warning page still appears. In your own browser, free ngrok always shows that page once; click Visit Site.
+
+Free ngrok has usage limits, so avoid very large crawls.
+
 ## Deploy the UI to Vercel
 
 1. Push this repository to GitHub.

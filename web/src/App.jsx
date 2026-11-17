@@ -458,6 +458,7 @@ export default function App() {
                                         </div>
                                     </div>
                                 )}
+                                {HOSTED && mode === "hosted" && !localAddr && /ngrok/i.test(url) && <p className="text-[11px] text-base-content/60 leading-relaxed">ngrok address: the hosted server can open it. Keep ngrok and your site running while it captures.</p>}
                                 {HOSTED && mode === "hosted" && localAddr && <p className="text-[11px] text-base-content/60 leading-relaxed">This address only exists on your own network, so the hosted server cannot open it. The capture runs on your computer: start the server there with npm run dev, or put the site online first.</p>}
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
                                     <span className={`h-2 w-2 rounded-full ${srv.state === "online" ? "bg-success" : srv.state === "checking" ? "bg-warning animate-pulse" : "bg-error"}`} />

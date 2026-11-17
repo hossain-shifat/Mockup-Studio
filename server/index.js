@@ -16,6 +16,7 @@ const META = [/^169\.254\./, /^fe80:/i, /^fd00:ec2:/i, /^100\.100\.100\.200$/, /
 const PRIV = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^::1$/, /^f[cd][0-9a-f]{2}:/i];
 const META_HOSTS = ["metadata.google.internal", "metadata"];
 const SKIP_PATH = /(log-?out|sign-?out|delete|remove|destroy|unsubscribe|revoke)/i; // never visit risky links
+const NGROK = /(^|\.)ngrok[\w-]*\.(dev|app|io)$/i; // free ngrok shows a warning page to browsers unless this header is sent
 const SKIP_EXT = /\.(pdf|zip|png|jpe?g|gif|svg|webp|mp4|mkv|mp3|exe|dmg)$/i;
 const VIEWS = {
     desktop: { w: 1440, h: 900, dpr: 1.5 },
@@ -62,7 +63,7 @@ async function newCtx(browser, v, state, ok, sess) {
     await ctx.route("**/*", async (r) => { // re-check every request, incl. redirects
         const u = r.request().url();
         if (/^(data|blob):/.test(u)) return r.continue();
-        try { if (!ok.has(u)) { await guard(u); ok.set(u, 1); } r.continue(); } catch { try { ok.blocked?.add(new URL(u).host); } catch { /* ignore */ } r.abort(); }
+        try { if (!ok.has(u)) { await guard(u); ok.set(u, 1); } if (NGROK.test(new URL(u).hostname)) return r.continue({ headers: { ...r.request().headers(), "ngrok-skip-browser-warning": "1" } }); r.continue(); } catch { try { ok.blocked?.add(new URL(u).host); } catch { /* ignore */ } r.abort(); }
     });
     if (sess && sess.data !== "{}") // sessionStorage is per-tab and not in storageState: replay it before the app boots
         await ctx.addInitScript(([o, d]) => {
@@ -70,6 +71,18 @@ async function newCtx(browser, v, state, ok, sess) {
             try { for (const [k, v] of Object.entries(JSON.parse(d))) if (sessionStorage.getItem(k) === null) sessionStorage.setItem(k, v); } catch { /* ignore */ }
         }, [sess.origin, sess.data]);
     return ctx;
+}
+
+// Free ngrok shows "You are about to visit ... [Visit Site]" to browsers. Click through it like a person would.
+async function dismissNgrok(page) {
+    try {
+        if (!NGROK.test(new URL(page.url()).hostname)) return;
+        const btn = page.getByRole("button", { name: /visit site/i }).or(page.getByRole("link", { name: /visit site/i })).or(page.getByText(/^\s*visit site\s*$/i)).first();
+        if (!(await btn.count())) return;
+        await btn.click({ timeout: 4000 });
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(600);
+    } catch { /* isBad reports it if the warning page is still showing */ }
 }
 
 async function open(page, url) {
@@ -83,18 +96,20 @@ async function open(page, url) {
             await page.waitForTimeout(800);
         }
     }
+    await dismissNgrok(page);
     await page.waitForTimeout(700);
     return resp;
 }
 
 // error, "not found" and blank pages make bad mockups: detect and skip them
 async function isBad(page, resp) {
-    if (resp && resp.status() >= 400) return `HTTP ${resp.status()}`;
+    if (resp && resp.status() >= 400) return `HTTP ${resp.status()}${/ngrok/i.test(page.url()) ? " (is the ngrok tunnel and your site still running?)" : ""}`;
     await page.waitForFunction(() => (document.body?.innerText || "").trim().length > 20, null, { timeout: 4000 }).catch(() => {}); // let a slow single-page app render first
     const i = await page.evaluate(() => {
         const t = (document.body?.innerText || "").trim();
-        return { len: t.length, head: t.slice(0, 300).toLowerCase(), title: document.title.toLowerCase(), media: document.querySelectorAll("img,svg,canvas,video").length };
+        return { len: t.length, head: t.slice(0, 300).toLowerCase(), title: document.title.toLowerCase(), media: document.querySelectorAll("img,svg,canvas,video").length, warn: /you are about to visit/i.test(t) && /ngrok/i.test(t) };
     });
+    if (i.warn) return "ngrok warning page (could not click Visit Site)";
     const words = /(page not found|not found|something went wrong|server error|forbidden|access denied|unauthori[sz]ed|no such page|does not exist|oops)/;
     const codes = /\b(404|403|500|502|503)\b/;
     if (i.len < 400 && (words.test(i.head) || words.test(i.title) || codes.test(i.title) || codes.test(i.head.slice(0, 120)))) return "error page";
