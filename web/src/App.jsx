@@ -110,7 +110,7 @@ export default function App() {
     const base = mode === "hosted" && HOSTED && !localAddr ? HOSTED.trim().replace(/\/+$/, "") : LOCAL;
     const [srv, setSrv] = useState({ state: "checking", version: "" });
     const [latest, setLatest] = useState("");
-    const [cap, setCap] = useState({ busy: false, msg: "", done: 0, total: 0, error: null, note: "", scrollNote: "" });
+    const [cap, setCap] = useState({ busy: false, msg: "", done: 0, total: 0, error: null, note: "", scrollNote: "", shots: 0, summary: "" });
     const [login, setLogin] = useState(() => ({ open: !!lsGet("ms:email", ""), email: lsGet("ms:email", ""), password: "", url: lsGet("ms:loginUrl", "") })); // email + login page remembered; password never saved
     const [crawl, setCrawl] = useState(true);
     const [maxPages, setMaxPages] = useState(50);
@@ -272,7 +272,7 @@ export default function App() {
         let target = url.trim();
         if (target && !/^https?:\/\//i.test(target)) { target = `http://${target}`; setUrl(target); }
         setCap({ busy: true, msg: "Starting…", done: 0, total: 0, error: null, note: "" });
-        const stamp = Date.now(); let path = "/"; const got = [];
+        const stamp = Date.now(); let path = "/"; const got = []; let sawDone = false;
         const ac = new AbortController(); abortRef.current = ac;
         try { path = new URL(url).pathname; } catch { /* server reports invalid URL */ }
         try {
@@ -287,6 +287,7 @@ export default function App() {
                     if (!ln) continue;
                     const m = JSON.parse(ln);
                     if (m.error) throw new Error(m.error);
+                    if (m.done) sawDone = true;
                     if (m.status) setCap((s) => ({ ...s, msg: m.status }));
                     if (m.progress) setCap((s) => ({ ...s, done: m.progress.done, total: m.progress.total }));
                     if (m.session !== undefined) setSessionInfo(m.session ? { id: m.session.id, as: m.session.as, base } : null);
@@ -295,12 +296,13 @@ export default function App() {
                     if (m.signedOut !== undefined) setCap((s) => ({ ...s, note: m.signedOut ? "Signed out of the site. Password cleared." : "No sign-out button found. The session was discarded here; sign out of the site yourself if needed." }));
                     if (m.shot) {
                         const sec = m.shot.section ?? 0;
-                        const shot = { key: `${stamp}-${m.shot.page}-${m.shot.view}-${sec}`, page: `${stamp}-${m.shot.page}`, label: `${m.shot.path} · ${m.shot.view}${sec ? ` #${sec + 1}` : ""}`, view: m.shot.view, sec, title: m.shot.title, host: (() => { try { return new URL(target).hostname; } catch { return ""; } })(), src: m.shot.src }; got.push(shot); setShots((s) => [...s, shot]);
+                        const shot = { key: `${stamp}-${m.shot.page}-${m.shot.view}-${sec}`, page: `${stamp}-${m.shot.page}`, label: `${m.shot.path} · ${m.shot.view}${sec ? ` #${sec + 1}` : ""}`, view: m.shot.view, sec, score: m.shot.score, title: m.shot.title, host: (() => { try { return new URL(target).hostname; } catch { return ""; } })(), src: m.shot.src }; got.push(shot); setShots((s) => [...s, shot]); setCap((s) => ({ ...s, shots: (s.shots || 0) + 1 }));
                         
                     }
                 }
             }
-            setCap((s) => ({ ...s, busy: false }));
+            if (!got.length) throw new Error("The server finished without sending any screenshots. On the free Render plan it probably ran out of memory: open the Render Logs tab and look for \"out of memory\".");
+            setCap((s) => ({ ...s, busy: false, summary: `${got.length} screenshots from ${new Set(got.map((g) => g.page)).size} pages captured.${sawDone ? "" : " The server stopped early, possibly out of memory, so some pages are missing."}` }));
             if (login.password) setLogin((l) => ({ ...l, password: "" }));
             await runAuto(got, seed);
         } catch (e) {
@@ -511,12 +513,13 @@ export default function App() {
                             </button>
                             {cap.busy && (
                                 <div className="mt-3 text-xs text-base-content/70">
-                                    <div className="flex items-center gap-2"><Loader2 size={13} className="animate-spin text-primary" />{cap.msg}</div>
+                                    <div className="flex items-center gap-2"><Loader2 size={13} className="animate-spin text-primary" />{cap.msg}{cap.shots ? ` · ${cap.shots} screenshots` : ""}</div>
                                     {cap.total > 0 && <progress className="progress progress-primary w-full mt-2" value={cap.done} max={cap.total} />}
                                     <button onClick={() => abortRef.current?.abort()} className="btn btn-xs btn-outline mt-2"><Square size={11} />Stop and use what is captured</button>
                                 </div>
                             )}
                             {cap.error && <p role="alert" className="mt-3 text-xs text-error leading-relaxed">{cap.error}</p>}
+                            {cap.summary && !cap.busy && <p role="status" className="mt-3 text-xs text-success leading-relaxed">{cap.summary}</p>}
                             {cap.scrollNote && !cap.busy && <p role="status" className="mt-3 text-xs text-base-content/70 leading-relaxed">{cap.scrollNote}</p>}
                             {cap.note && !cap.busy && <p role="status" className="mt-3 text-xs text-success leading-relaxed">{cap.note}</p>}
                             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -548,7 +551,7 @@ export default function App() {
                                         <div className="aspect-[4/3] rounded-md overflow-hidden bg-base-300 border border-base-300 group-hover:border-primary">
                                             <img src={s.src} alt={s.label} loading="lazy" decoding="async" className="w-full h-full object-cover object-top" />
                                         </div>
-                                        <div className="text-[11px] text-base-content/60 truncate mt-1">{s.label}</div>
+                                        <div className="text-[11px] text-base-content/60 truncate mt-1">{s.label}{s.score != null ? ` · ${Math.round(s.score * 100)}%` : ""}</div>
                                     </button>
                                 ))}
                             </div>

@@ -9,6 +9,8 @@ Paste a URL, press **Capture**, and every page becomes a set of mockups across 2
 - **Scroll sections.** Each page is scrolled, including inner scroll containers, and captured at the top, middle and bottom, so mockups show more than the first screen.
 - **Real captures.** A headless Edge/Chrome (Playwright) opens your site and takes desktop, tablet, mobile and full-page screenshots.
 - **Sign-in support.** Enter an email and password once. The studio signs in, explores your pages, and signs out when you are done.
+- **Smart sections.** Each scroll stop is scored by how much imagery and real content is on screen. Footers and empty areas are never used, and the best sections feed the mockups first. The percentage on each screenshot is that score.
+- **Smart routes.** Pages that differ only by an id (`/media/1` … `/media/100`) count as one kind of page and are visited twice, not a hundred times. Every kind of page is visited once before any is repeated. Legal, sign-in and near-empty pages are skipped.
 - **Page crawler.** Follows same-site links up to a limit you choose (1 to 100). Skips logout and delete links, error pages and blank pages.
 - **Auto mockups.** Every page is placed in every template: laptop, browser window, tablet, phone, flat panel, and multi-device scenes. Colors come from the site itself.
 - **Gallery.** Filter by page or template, select the mockups you like, and download only those.
@@ -106,6 +108,11 @@ The hosted server has no password. It captures public websites only, accepts cal
 The container installs Chromium. Free plans sleep when idle and have little memory, so crawls can be slow or run out of memory. A paid instance is more reliable.
 
 ## Troubleshooting
+
+**Capture stops after a few seconds, or nothing appears**
+- The studio now says how many screenshots arrived, and reports it when the server stops early.
+- On a free Render instance the usual cause is running out of memory (512 MB). Open the service in Render, then Logs, and look for "out of memory". Lower the page limit and sections, or use a paid instance.
+- The hosted server already uses smaller screenshots to save memory.
 
 **"No usable pages found"**
 - The message lists why each page was skipped (error page, blank page, asks for sign-in).

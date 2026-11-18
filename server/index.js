@@ -5,6 +5,7 @@ const express = require("express");
 const dns = require("dns").promises;
 const net = require("net");
 const crypto = require("crypto");
+const { createRouteBook } = require("./routes");
 const { chromium } = require("playwright-core");
 
 const PORT = process.env.PORT || 5050;
@@ -15,13 +16,15 @@ const IDLE_MS = parseInt(process.env.SESSION_IDLE_MS || "600000", 10); // sign o
 const META = [/^169\.254\./, /^fe80:/i, /^fd00:ec2:/i, /^100\.100\.100\.200$/, /^0\./];
 const PRIV = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^::1$/, /^f[cd][0-9a-f]{2}:/i];
 const META_HOSTS = ["metadata.google.internal", "metadata"];
-const SKIP_PATH = /(log-?out|sign-?out|delete|remove|destroy|unsubscribe|revoke)/i; // never visit risky links
+const PER_ROUTE = parseInt(process.env.PER_ROUTE || "2", 10); // visits per kind of page (/media/:id counts once for all ids)
+const SKIP_PATH = /(log-?out|sign-?out|log-?in|sign-?in|sign-?up|register|forgot|reset|verify|delete|remove|destroy|unsubscribe|revoke|privacy|terms|cookie|legal|imprint|disclaimer|sitemap|licen[sc]e|\btos\b)/i; // risky, or poor mockup material
 const NGROK = /(^|\.)ngrok[\w-]*\.(dev|app|io)$/i; // free ngrok shows a warning page to browsers unless this header is sent
 const SKIP_EXT = /\.(pdf|zip|png|jpe?g|gif|svg|webp|mp4|mkv|mp3|exe|dmg)$/i;
+const LITE = !ALLOW_LOCAL; // hosted server: small memory budget, so smaller screenshots
 const VIEWS = {
-    desktop: { w: 1440, h: 900, dpr: 1.5 },
-    tablet: { w: 820, h: 1180, dpr: 2 },
-    mobile: { w: 390, h: 844, dpr: 3, mobile: true },
+    desktop: { w: 1440, h: 900, dpr: LITE ? 1 : 1.5 },
+    tablet: { w: 820, h: 1180, dpr: LITE ? 1.5 : 2 },
+    mobile: { w: 390, h: 844, dpr: LITE ? 2 : 3, mobile: true },
 };
 const img = (b, t = "png") => `data:image/${t};base64,${b.toString("base64")}`;
 const norm = (u) => { const x = new URL(u); return x.origin + (x.pathname.replace(/\/+$/, "") || "/"); };
@@ -48,7 +51,7 @@ async function guard(raw) {
 }
 
 async function launch() {
-    const args = process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : []; // containers run as root
+    const args = [...(process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : []), ...(LITE ? ["--disable-gpu", "--disable-extensions"] : [])]; // containers run as root
     for (const channel of [process.env.BROWSER, "msedge", "chrome", "chromium"].filter(Boolean)) {
         try { return await chromium.launch(channel === "chromium" ? { args } : { channel, args }); } catch { /* try next */ }
     }
@@ -177,7 +180,21 @@ async function signOut(page, startUrl, spa) {
     } catch { return false; }
 }
 
-// Scrolls the page (or its inner scroll container, as in most web apps) and returns viewport shots of the lower sections.
+// What is on screen right now? Pictures and real content make a good mockup; a footer or empty space does not.
+const MEASURE = () => {
+    const vw = innerWidth, vh = innerHeight, area = vw * vh;
+    const vis = (r) => { const w = Math.min(r.right, vw) - Math.max(r.left, 0), h = Math.min(r.bottom, vh) - Math.max(r.top, 0); return w > 0 && h > 0 ? w * h : 0; };
+    let media = 0, blocks = 0, footer = 0;
+    for (const el of document.querySelectorAll("img,video,canvas,svg,picture")) { const a = vis(el.getBoundingClientRect()); if (a > 3000) media += a; }
+    for (const el of document.querySelectorAll("h1,h2,h3,h4,button,input,select,textarea,article,li,[class*='card' i]")) if (vis(el.getBoundingClientRect()) > 1500) blocks++;
+    for (const el of document.querySelectorAll("footer,[role='contentinfo'],[class*='footer' i],[id*='footer' i]")) footer = Math.max(footer, vis(el.getBoundingClientRect()));
+    return { media: Math.min(media / area, 1), blocks: Math.min(blocks / 14, 1), footer: Math.min(footer / area, 1) };
+};
+const valueOf = (m) => Math.max(0, 0.55 * m.media + 0.3 * m.blocks - 1.4 * m.footer - (m.media < 0.03 && m.blocks < 0.15 ? 0.2 : 0));
+const MIN_VALUE = 0.1;
+
+// Scrolls the page (or its inner scroll container, as in most web apps), scores each stop,
+// skips footers and empty areas, and returns the best sections first.
 async function extraShots(page, sections, fmt) {
     const info = await page.evaluate(() => {
         document.documentElement.style.scrollBehavior = "auto";
@@ -197,19 +214,29 @@ async function extraShots(page, sections, fmt) {
         const r = best.getBoundingClientRect();
         return { max: best.scrollHeight - best.clientHeight, vh: best.clientHeight, cx: Math.round(r.left + r.width / 2), cy: Math.round(r.top + Math.min(r.height, innerHeight) / 2) };
     }).catch(() => null);
-    if (!info) return [];
+    if (!info || info.max < 40) return [];
     const setTop = (y) => page.evaluate((yy) => { const el = document.querySelector("[data-ms-scroller]") || document.scrollingElement; el.scrollTo({ top: yy, behavior: "instant" }); return el.scrollTop; }, y).catch(() => 0);
-    const n = Math.max(1, Math.min(sections, Math.ceil(info.max / info.vh) + 1)), out = [];
-    for (let k = 1; k < n; k++) {
-        const y = Math.round((info.max * k) / (n - 1));
+    const goTo = async (y) => {
         const got = await setTop(y);
-        if (got < y - 8) { // scrolling is hijacked by a smooth-scroll library: use the real mouse wheel
-            await page.mouse.move(info.cx, info.cy); await page.mouse.wheel(0, y - got); await page.waitForTimeout(700);
-        }
-        await page.waitForLoadState("networkidle", { timeout: 2000 }).catch(() => {});
-        await page.waitForTimeout(500); // let lazy images and reveal animations finish
-        out.push(await page.screenshot(fmt));
+        if (got < y - 8) { await page.mouse.move(info.cx, info.cy); await page.mouse.wheel(0, y - got); await page.waitForTimeout(600); } // smooth-scroll library: real wheel
+        await page.waitForLoadState("networkidle", { timeout: 1500 }).catch(() => {});
+        await page.waitForTimeout(350); // lazy images, reveal animations
+    };
+    const stops = Math.min(8, Math.ceil(info.max / (info.vh * 0.7)) + 1), cands = [];
+    for (let k = 1; k < stops; k++) {
+        const y = Math.round((info.max * k) / (stops - 1));
+        await goTo(y);
+        const m = await page.evaluate(MEASURE).catch(() => null);
+        if (m) cands.push({ y, m, score: valueOf(m) });
     }
+    const pool = cands.filter((c) => c.m.footer < 0.3 && c.score > 0.06).sort((a, b) => b.score - a.score); // never a footer, never empty
+    const chosen = [];
+    for (const c of pool) {
+        if (chosen.length >= sections - 1) break;
+        if (chosen.every((o) => Math.abs(o.y - c.y) >= info.vh * 0.6)) chosen.push(c); // distinct sections, not near-duplicates
+    }
+    const out = [];
+    for (const c of chosen) { await goTo(c.y); out.push({ buf: await page.screenshot(fmt), score: c.score }); }
     await setTop(0);
     return out;
 }
@@ -278,6 +305,7 @@ app.post("/api/capture", async (req, res) => {
         const { url: rawUrl, login, crawl, maxPages, sessionId, keep, sections } = req.body || {};
         const secBase = Math.min(Math.max(parseInt(sections, 10) || 3, 1), 5);
         const start = await guard(rawUrl);
+        console.log(`[capture] ${start.href} crawl=${!!crawl} max=${maxPages} sections=${sections}`);
         const origin = new URL(start.href).origin;
         seeds = [start.href];
 
@@ -321,24 +349,25 @@ app.post("/api/capture", async (req, res) => {
         }
 
         browser ??= await launch();
-        for (const k of Object.keys(VIEWS)) ctxs[k] = await newCtx(browser, VIEWS[k], state, ok, sess);
+        const ctxOf = async (k) => (ctxs[k] ??= await newCtx(browser, VIEWS[k], state, ok, sess)); // created on first use: saves memory
         const want = crawl ? Math.min(Math.max(parseInt(maxPages, 10) || 50, 1), 100) : 1;
-        const queue = [...seeds], seen = new Set(), deadline = Date.now() + Math.min(60000 + want * 40000, 3600000);
+        const book = createRouteBook(PER_ROUTE); seeds.forEach((s) => book.add(s));
+        const deadline = Date.now() + Math.min(60000 + want * 40000, 3600000);
         let idx = 0, cdp = null, withScroll = 0, flat = 0;
-        const skipped = []; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
+        const skipped = [];
+        let lowValue = 0; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
         const emulate = (v) => cdp.send("Emulation.setDeviceMetricsOverride", { width: v.w, height: v.h, deviceScaleFactor: v.dpr, mobile: !!v.mobile });
 
-        while (queue.length && idx < want && !aborted && Date.now() < deadline) {
-            const target = queue.shift(), key = norm(target);
-            if (seen.has(key)) continue;
-            seen.add(key);
+        while (idx < want && !aborted && Date.now() < deadline) {
+            const target = book.next(); // least-visited kind of page first
+            if (!target) break; // only repeats of pages already visited are left
             const path = new URL(target).pathname || "/";
-            const fmt = idx < 6 ? { type: "png" } : { type: "jpeg", quality: 88 }; // keep memory sane on big crawls
+            const fmt = !LITE && idx < 6 ? { type: "png" } : { type: "jpeg", quality: 86 }; // keep memory sane on big crawls
             send({ status: `Capturing ${path}`, progress: { done: idx, total: want } });
 
             let dp = null, resp = null, own = true;
             try { // one bad page never kills the run
-                const openFresh = async () => { dp = await ctxs.desktop.newPage(); dp.setDefaultNavigationTimeout(20000); resp = await open(dp, target); own = true; };
+                const openFresh = async () => { dp = await (await ctxOf("desktop")).newPage(); dp.setDefaultNavigationTimeout(20000); resp = await open(dp, target); own = true; };
                 const openLive = async () => { cdp ??= await liveCtx.newCDPSession(live); await emulate(VIEWS.desktop); await spaGo(live, target); dp = live; resp = null; own = false; };
                 if (mode === "fresh") await openFresh(); else await openLive();
 
@@ -357,12 +386,18 @@ app.post("/api/capture", async (req, res) => {
                 }
                 const bad = await isBad(dp, resp);
                 if (bad) { send({ status: `Skipped ${path} (${bad})` }); skipped.push(`${path}: ${bad}`); if (own) await dp.close(); continue; }
-                if (crawl) for (const l of await links(dp, origin)) if (!seen.has(l) && !queue.includes(l)) queue.push(l);
+                const v0 = valueOf(await dp.evaluate(MEASURE).catch(() => ({ media: 0.3, blocks: 0.5, footer: 0 })));
+                if (crawl) for (const l of await links(dp, origin)) book.add(l);
+                if (idx > 0 && crawl && v0 < MIN_VALUE) { // mostly text or empty: a poor mockup, but its links were still collected
+                    send({ status: `Skipped ${path} (little to show, poor mockup)` }); skipped.push(`${path}: little to show`); lowValue++;
+                    if (own) await dp.close();
+                    continue;
+                }
                 const title = (await dp.title().catch(() => "")).trim().slice(0, 80);
                 const secN = idx < 12 ? secBase : Math.min(secBase, 2); // keep memory sane on big crawls
-                send({ shot: { view: "desktop", page: idx, path, title, section: 0, src: img(await dp.screenshot(fmt), fmt.type) } });
+                send({ shot: { view: "desktop", page: idx, path, title, section: 0, score: v0, src: img(await dp.screenshot(fmt), fmt.type) } });
                 const ex = secN > 1 ? await extraShots(dp, secN, fmt) : [];
-                ex.forEach((b, k) => send({ shot: { view: "desktop", page: idx, path, title, section: k + 1, src: img(b, fmt.type) } }));
+                ex.forEach((e, k) => send({ shot: { view: "desktop", page: idx, path, title, section: k + 1, score: e.score, src: img(e.buf, fmt.type) } }));
                 if (secN > 1) { if (ex.length) withScroll++; else flat++; }
                 if (idx < 3) {
                     const full = Math.min(await dp.evaluate(() => document.documentElement.scrollHeight), 8000);
@@ -373,10 +408,10 @@ app.post("/api/capture", async (req, res) => {
 
                 for (const view of idx < 3 ? ["tablet", "mobile"] : ["mobile"]) {
                     const bufs = [];
-                    const take = async (pg) => { bufs.push(await pg.screenshot(fmt)); if (view === "mobile" && secN > 1) bufs.push(...(await extraShots(pg, secN, fmt))); };
+                    const take = async (pg) => { bufs.push({ buf: await pg.screenshot(fmt) }); if (view === "mobile" && secN > 1) bufs.push(...(await extraShots(pg, secN, fmt))); };
                     if (mode === "live") { await emulate(VIEWS[view]); await live.waitForTimeout(700); await take(live); }
-                    else { const p = await ctxs[view].newPage(); p.setDefaultNavigationTimeout(20000); try { await open(p, target); await take(p); } finally { await p.close().catch(() => {}); } }
-                    bufs.forEach((b, k) => send({ shot: { view, page: idx, path, title, section: k, src: img(b, fmt.type) } }));
+                    else { const p = await (await ctxOf(view)).newPage(); p.setDefaultNavigationTimeout(20000); try { await open(p, target); await take(p); } finally { await p.close().catch(() => {}); } }
+                    bufs.forEach((b, k) => send({ shot: { view, page: idx, path, title, section: k, score: b.score, src: img(b.buf, fmt.type) } }));
                 }
                 if (mode === "live") await emulate(VIEWS.desktop);
                 idx++;
@@ -392,17 +427,18 @@ app.post("/api/capture", async (req, res) => {
             throw new Fatal(`No usable pages found. ${skipped.slice(0, 3).join("; ") || "Nothing could be opened."}${blk ? ` The site tried to load data from ${blk}, which this server cannot reach (a local or LAN address). Use a server on your own network, or put that service online.` : ""}`);
         }
         send({ progress: { done: idx, total: idx } });
-        if (secBase > 1) send({ note: `Scroll sections: ${withScroll} page${withScroll === 1 ? "" : "s"} scrolled, ${flat} fit on one screen.` });
+        send({ note: `${secBase > 1 ? `Scroll sections: ${withScroll} page${withScroll === 1 ? "" : "s"} scrolled, ${flat} fit on one screen. ` : ""}Skipped ${book.repeated()} repeated routes (same page, different id) and ${lowValue} low-value pages.` });
 
         if (session) { session.memOnly = mode === "live"; send({ keptOpen: true }); } // signed in for the next capture
         else if (live) { // login without "stay signed in": log out once the run is finished
             send({ status: "Signing out…" });
             let out;
             if (mode === "live") out = await signOut(live, seeds[0], true);
-            else { const sp = await ctxs.desktop.newPage(); sp.setDefaultNavigationTimeout(15000); out = await signOut(sp, seeds[0], false); await sp.close().catch(() => {}); }
+            else { const sp = await (await ctxOf("desktop")).newPage(); sp.setDefaultNavigationTimeout(15000); out = await signOut(sp, seeds[0], false); await sp.close().catch(() => {}); }
             signedOut = true; send({ signedOut: out });
         }
         failed = false;
+        console.log(`[capture] finished: ${idx} pages`);
         send({ done: true });
     } catch (e) {
         send({ error: String(e.message || e).split("\n")[0] });
@@ -419,6 +455,9 @@ app.post("/api/capture", async (req, res) => {
         res.end();
     }
 });
+
+process.on("unhandledRejection", (e) => console.error("[unhandled]", e)); // one bad request must not take the server down
+process.on("uncaughtException", (e) => console.error("[uncaught]", e));
 
 app.listen(PORT, HOST, () =>
     console.log(`Capture server :${PORT}  local-dev mode: ${ALLOW_LOCAL ? "ON" : "off"}`));
