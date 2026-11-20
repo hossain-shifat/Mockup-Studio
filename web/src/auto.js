@@ -101,31 +101,81 @@ function fitGroup(L, W, H, m, max, dy = 0, avail = 1) {
     for (const l of L) { l.x = Math.round(W / 2 + (l.x - cx) * s); l.y = Math.round(H * (0.5 + dy) + (l.y - cy) * s); l.scale = +(l.scale * s).toFixed(3); }
 }
 
+// ── honest, designed copy: the site's own name and heading, a short headline by page role, never an address
+const COPY = {
+    home: ["Everything in one place", "Your world, beautifully organised", "Start here, go anywhere"],
+    live: ["Live, without the wait", "Every channel, one tap away", "Always on, always ready"],
+    player: ["Press play. Everything else fades.", "Made for watching", "Distraction-free playback"],
+    detail: ["Every story, up close", "Details that draw you in", "Know before you press play"],
+    browse: ["A library worth browsing", "Find your next favourite", "Browse at the speed of thought"],
+    series: ["Binge, beautifully", "Season after season", "Every episode within reach"],
+    search: ["Find anything, fast", "Search that keeps up", "Ask once, find it"],
+    data: ["Numbers that make sense", "Insight at a glance", "Clarity in every chart"],
+    account: ["Yours to customise", "Settings that stay out of the way", "Make it yours"],
+    other: ["Crafted with care", "Simple by design", "Built for focus", "Clarity in every detail"],
+};
+const ROLE_NAME = { player: "Now playing", detail: "Details", live: "Live", series: "Series", home: "Home" };
+const roleOf = (label) => {
+    const p = label.toLowerCase(), segs = p.split("/").filter(Boolean);
+    if (!segs.length || /^(home|index)$/.test(segs[0])) return "home";
+    if (/player|watch|stream|video|playback/.test(p)) return "player";
+    if (/live|channel|\btv\b/.test(p)) return "live";
+    if (/series|show|episode|season/.test(p)) return "series";
+    if (/search|find/.test(p)) return "search";
+    if (/dashboard|analytics|stats|report|chart|overview|insight/.test(p)) return "data";
+    if (/setting|profile|account|preference|privacy|folders|services/.test(p)) return "account";
+    if (/^(media|movie|film|title|item|product|post|article|detail)/.test(segs[0]) && segs.length > 1) return "detail";
+    if (/movie|film|library|browse|category|genre|explore|discover|catalog|shop|collection|watchlist|favou?rite/.test(p)) return "browse";
+    return "other";
+};
+const idLike = (t) => /^\d+$/.test(t) || (/[A-Z]/.test(t) && /[a-z]/.test(t) && t.length >= 12) || /^[0-9a-f-]{12,}$/i.test(t) || (t.length >= 8 && /\d/.test(t) && /[a-z]/i.test(t));
+const okBrand = (b) => !!b && b.length <= 28 && !/localhost|ngrok|\.local\b|^\d{1,3}(\.\d{1,3}){3}/i.test(b);
+const cleanTitle = (t) => (t || "").split(/\s[|\u2013\u2014-]\s/)[0].trim();
+const lastTitlePart = (t) => { const parts = (t || "").split(/\s[|\u2013\u2014-]\s/); return parts[parts.length - 1].trim(); };
+
 export async function generate(shots, seed = 0) {
-    // every captured page x every template; each template shows a different scroll section
+    // every captured page x every template, each with different, fitting screenshots
     const pages = new Map();
     for (const s of shots) {
         const k = s.page ?? s.key;
-        if (!pages.has(k)) pages.set(k, { views: {}, label: s.label.split(" \u00b7 ")[0], title: "", host: "" });
+        if (!pages.has(k)) pages.set(k, { views: {}, label: s.label.split(" \u00b7 ")[0], title: "", brand: "", h1: "" });
         const p = pages.get(k);
         (p.views[s.view] ??= [])[s.sec ?? 0] = s.key;
         if (s.title && !p.title) p.title = s.title;
-        if (s.host) p.host = s.host;
+        if (s.brand && !p.brand) p.brand = s.brand;
+        if (s.h1 && !p.h1) p.h1 = s.h1;
     }
     const entries = [...pages.entries()], sets = entries.map(([, v]) => v.views), any = shots[shots.length - 1]?.key;
     const sameTitle = entries.length > 1 && new Set(entries.map(([, v]) => v.title)).size <= 1;
-    const pick = (si, token, sec) => {
-        const [v, o] = token.split("+"), off = +o || 0, set = sets[(si + off) % sets.length];
-        const arr = off && sets.length === 1 ? set.full ?? set[v] : set[v] ?? set.desktop ?? Object.values(set)[0];
-        const list = (arr || []).filter(Boolean);
-        return list.length ? list[sec % list.length] : any;
+    const siteBrand = entries.map(([, v]) => (okBrand(v.brand) ? v.brand : okBrand(lastTitlePart(v.title)) ? lastTitlePart(v.title) : "")).find(Boolean) || "";
+
+    const base = (t) => t.split("+")[0], offOf = (t) => +t.split("+")[1] || 0;
+    // does the page this layer would show have the right kind of screenshot (a phone needs a phone view)?
+    const viewOk = (si, token) => {
+        const set = sets[(si + offOf(token)) % sets.length], b = base(token);
+        if (set.upload) return true;
+        return b === "full" ? !!(set.full || set.desktop) : !!set[b];
     };
+    // pick a screenshot, preferring ones this mockup has not used yet
+    const pick = (si, token, sec, used) => {
+        const v = base(token), off = offOf(token), home = (si + off) % sets.length, set = sets[home];
+        const own = ((off && sets.length === 1 ? set.full ?? set[v] : set[v] ?? set.desktop ?? Object.values(set)[0]) || []).filter(Boolean);
+        const r = own.length ? sec % own.length : 0, order = [...own.slice(r), ...own.slice(0, r)];
+        for (let k = 1; k < sets.length; k++) order.push(...((sets[(home + k) % sets.length][v] || []).filter(Boolean)));
+        const key = order.find((x) => !used.has(x)) ?? order[0] ?? any;
+        used.add(key);
+        return key;
+    };
+
     const first = (v) => (v.desktop ?? Object.values(v)[0] ?? [])[0];
     const pals = await Promise.all(sets.map((v) => palette(shots.find((s) => s.key === first(v))?.src)));
     const out = [];
     entries.forEach(([pk, info], si) => {
-        const pal = palettes(pals[si]), h = pals[si].h;
+        const pal = palettes(pals[si]), h = pals[si].h, role = roleOf(info.label);
+        const last = info.label.split("/").filter(Boolean).pop() || "";
+        const pageName = info.h1 || (!sameTitle && info.title ? cleanTitle(info.title) : idLike(last) ? ROLE_NAME[role] || "Details" : pretty(info.label));
         R.forEach((r, ri) => {
+            if (!r.layers.every(([, view]) => viewOk(si, view))) return; // never show a desktop screen inside a phone when a real phone view is missing
             let c, c2, style;
             if ((seed + si + ri) % 3 !== 0) { // two thirds: bold flat colour blocking
                 const cu = CURATED[(seed + si * 2 + ri) % CURATED.length];
@@ -137,15 +187,16 @@ export async function generate(shots, seed = 0) {
             }
             const shape = ["circle", "split", "band", "arch"].includes(style);
             const pool = lum(c.a) < 0.5 ? FRAMES_ON_DARK : FRAMES_ON_LIGHT, frame = r.frame ?? pool[(seed + si + ri) % pool.length];
-            const layers = r.layers.map(([device, view, x, y, scale, rotZ = 0, rotX = 0, rotY = 0, blur = 0], j) => ({
-                id: n++, device, shot: pick(si, view, ri + j), x, y, scale, rotX, rotY, rotZ, blur, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: info.host ? info.host + (info.label === "/" ? "" : info.label) : "",
+            const used = new Set();
+            const layers = r.layers.map(([device, view, x, y, scale, rotZ = 0, rotX = 0, rotY = 0], j) => ({
+                id: n++, device, shot: pick(si, view, ri + j, used), x, y, scale, rotX, rotY, rotZ, blur: 0, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: pageName,
             }));
             if (r.align === "bottom") { // shared baseline: devices sit on the same line
                 const bot = Math.max(...layers.map((l) => l.y + (DEVICES[l.device].h * l.scale) / 2));
                 layers.forEach((l) => { l.y = bot - (DEVICES[l.device].h * l.scale) / 2; });
             }
             fitGroup(layers, r.size[0], r.size[1], r.m, r.max ?? 1.6, (r.dy ?? 0) + (r.cap === "tl" ? 0.06 : r.cap === "bc" ? -0.06 : 0), r.cap ? 0.88 : 1);
-            const name = pretty(info.label), title = sameTitle || !info.title ? name : info.title.split(/\s[|\u2013\u2014-]\s/)[0].trim();
+            const lines = COPY[role];
             out.push({
                 id: `${pk}|${r.name}`, pageIndex: si, pageLabel: info.label, name: r.name,
                 file: `p${String(si + 1).padStart(2, "0")}-${slug(info.label === "/" ? "home" : info.label)}-${slug(r.name)}`,
@@ -153,7 +204,7 @@ export async function generate(shots, seed = 0) {
                     size: { w: r.size[0], h: r.size[1] },
                     bg: { type: "gradient", a: c.a, b: c.b, angle: 165, glow: false, spot: !shape, vig: !shape, grain: true, style, c2, hl: hsl(h, 50, lum(c.a) < 0.5 ? 45 : 75) },
                     layers,
-                    caption: r.cap ? { pos: r.cap, eyebrow: `NO. ${String(si + 1).padStart(2, "0")} / ${String(entries.length).padStart(2, "0")}`, title, meta: info.host || "" } : null,
+                    caption: r.cap ? { pos: r.cap, eyebrow: siteBrand || "Interface design", title: lines[(si + ri) % lines.length], meta: pageName } : null,
                 },
             });
         });

@@ -17,6 +17,7 @@ const META = [/^169\.254\./, /^fe80:/i, /^fd00:ec2:/i, /^100\.100\.100\.200$/, /
 const PRIV = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^::1$/, /^f[cd][0-9a-f]{2}:/i];
 const META_HOSTS = ["metadata.google.internal", "metadata"];
 const PER_ROUTE = parseInt(process.env.PER_ROUTE || "2", 10); // visits per kind of page (/media/:id counts once for all ids)
+const PER_FAMILY = parseInt(process.env.PER_FAMILY || "2", 10); // visits per section of the site (/live, /live/category/news ... are one family)
 const SKIP_PATH = /(log-?out|sign-?out|log-?in|sign-?in|sign-?up|register|forgot|reset|verify|delete|remove|destroy|unsubscribe|revoke|privacy|terms|cookie|legal|imprint|disclaimer|sitemap|licen[sc]e|\btos\b)/i; // risky, or poor mockup material
 const NGROK = /(^|\.)ngrok[\w-]*\.(dev|app|io)$/i; // free ngrok shows a warning page to browsers unless this header is sent
 const SKIP_EXT = /\.(pdf|zip|png|jpe?g|gif|svg|webp|mp4|mkv|mp3|exe|dmg)$/i;
@@ -51,7 +52,7 @@ async function guard(raw) {
 }
 
 async function launch() {
-    const args = [...(process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : []), ...(LITE ? ["--disable-gpu", "--disable-extensions"] : [])]; // containers run as root
+    const args = [...(process.getuid?.() === 0 ? ["--no-sandbox", "--disable-dev-shm-usage"] : []), ...(LITE ? ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--mute-audio", "--disable-features=site-per-process,BackForwardCache", "--js-flags=--max-old-space-size=256"] : [])]; // containers run as root
     for (const channel of [process.env.BROWSER, "msedge", "chrome", "chromium"].filter(Boolean)) {
         try { return await chromium.launch(channel === "chromium" ? { args } : { channel, args }); } catch { /* try next */ }
     }
@@ -192,10 +193,36 @@ const MEASURE = () => {
 };
 const valueOf = (m) => Math.max(0, 0.55 * m.media + 0.3 * m.blocks - 1.4 * m.footer - (m.media < 0.03 && m.blocks < 0.15 ? 0.2 : 0));
 const MIN_VALUE = 0.1;
+const unusable = (q) => !!q && (q.black > 0.5 || q.std < 5); // black (a player with no picture) or flat (blank page)
+const PAGE_META = () => {
+    const m = (s) => document.querySelector(s)?.content || "";
+    return { brand: (m('meta[property="og:site_name"]') || m('meta[name="application-name"]')).trim().slice(0, 40), h1: (document.querySelector("h1")?.innerText || "").trim().replace(/\s+/g, " ").slice(0, 48) };
+};
+
+// A player page is black until its video shows a frame: start it muted and jump into the film.
+async function wakeVideo(page) {
+    const had = await page.evaluate(async () => {
+        const vs = [...document.querySelectorAll("video")].filter((v) => v.clientWidth > 120);
+        if (!vs.length) return false;
+        for (const v of vs) {
+            try {
+                v.muted = true; await v.play().catch(() => {});
+                if (isFinite(v.duration) && v.duration > 30) {
+                    v.currentTime = Math.min(v.duration * 0.3, 900);
+                    await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 2500); });
+                }
+                await new Promise((r) => setTimeout(r, 700));
+                v.pause();
+            } catch { /* ignore */ }
+        }
+        return true;
+    }).catch(() => false);
+    if (had) await page.waitForTimeout(400);
+}
 
 // Scrolls the page (or its inner scroll container, as in most web apps), scores each stop,
 // skips footers and empty areas, and returns the best sections first.
-async function extraShots(page, sections, fmt) {
+async function extraShots(page, sections, fmt, check) {
     const info = await page.evaluate(() => {
         document.documentElement.style.scrollBehavior = "auto";
         const cands = [document.scrollingElement || document.documentElement, document.body, ...document.querySelectorAll("body *")];
@@ -236,7 +263,12 @@ async function extraShots(page, sections, fmt) {
         if (chosen.every((o) => Math.abs(o.y - c.y) >= info.vh * 0.6)) chosen.push(c); // distinct sections, not near-duplicates
     }
     const out = [];
-    for (const c of chosen) { await goTo(c.y); out.push({ buf: await page.screenshot(fmt), score: c.score }); }
+    for (const c of chosen) {
+        await goTo(c.y);
+        const buf = await page.screenshot(fmt);
+        if (check && unusable(await check(buf, fmt.type))) continue; // black or empty: leave it out
+        out.push({ buf, score: c.score });
+    }
     await setTop(0);
     return out;
 }
@@ -293,13 +325,14 @@ app.post("/api/session/end", async (req, res) => {
 app.post("/api/capture", async (req, res) => {
     res.setHeader("Content-Type", "application/x-ndjson");
     const send = (o) => res.write(JSON.stringify(o) + "\n");
-    if (busy >= 2) { send({ error: "Server busy. Try again in a moment." }); return res.end(); }
+    const sendBig = async (o) => { if (!res.write(JSON.stringify(o) + "\n")) await new Promise((r) => { res.once("drain", r); res.once("close", r); }); }; // wait for the client: unsent screenshots pile up in memory
+    if (busy >= (LITE ? 1 : 2)) { send({ error: "Server busy. Try again in a moment." }); return res.end(); }
     if (!ALLOW_LOCAL && limited(req.ip)) { send({ error: "Too many captures from your address this hour. Try again later." }); return res.end(); }
     busy++;
     let aborted = false; // client pressed Stop or closed the tab
     res.on("close", () => { aborted = true; });
 
-    let browser = null, ctxs = {}, session = null, created = false, failed = true, signedOut = false;
+    let browser = null, ctxs = {}, session = null, created = false, failed = true, signedOut = false, utilCtx = null, utilPage = null;
     let seeds = null, state, sess, live = null, liveCtx = null, mode = "fresh", ok = Object.assign(new Map(), { blocked: new Set() }); // blocked: hosts the page tried to load but this server may not reach
     try {
         const { url: rawUrl, login, crawl, maxPages, sessionId, keep, sections } = req.body || {};
@@ -350,19 +383,34 @@ app.post("/api/capture", async (req, res) => {
 
         browser ??= await launch();
         const ctxOf = async (k) => (ctxs[k] ??= await newCtx(browser, VIEWS[k], state, ok, sess)); // created on first use: saves memory
-        const want = crawl ? Math.min(Math.max(parseInt(maxPages, 10) || 50, 1), 100) : 1;
-        const book = createRouteBook(PER_ROUTE); seeds.forEach((s) => book.add(s));
+        const asked = crawl ? Math.min(Math.max(parseInt(maxPages, 10) || 50, 1), 100) : 1;
+        const want = LITE ? Math.min(asked, 12) : asked; // a small hosted instance cannot hold more
+        const analyze = async (buf, type) => { // looks at a screenshot the way a person would: is it black, flat or empty?
+            try {
+                utilCtx ??= await browser.newContext(); utilPage ??= await utilCtx.newPage();
+                return await utilPage.evaluate(async ([b64, mime]) => {
+                    const img = new Image(); img.src = `data:${mime};base64,${b64}`; await img.decode();
+                    const w = 96, h = 60, c = document.createElement("canvas"); c.width = w; c.height = h;
+                    const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, w, h);
+                    const d = g.getImageData(0, 0, w, h).data, n = w * h; let black = 0, sum = 0, sq = 0;
+                    for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; if (l < 8) black++; sum += l; sq += l * l; }
+                    const mean = sum / n; return { black: black / n, std: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
+                }, [buf.toString("base64"), `image/${type}`]);
+            } catch { return null; }
+        };
+        const book = createRouteBook(PER_ROUTE, PER_FAMILY); seeds.forEach((s) => book.add(s));
         const deadline = Date.now() + Math.min(60000 + want * 40000, 3600000);
         let idx = 0, cdp = null, withScroll = 0, flat = 0;
         const skipped = [];
-        let lowValue = 0; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
+        let lowValue = 0, blackSkipped = 0, lastReset = 0; // "fresh": new tabs with copied storage | "live": the signed-in tab itself
         const emulate = (v) => cdp.send("Emulation.setDeviceMetricsOverride", { width: v.w, height: v.h, deviceScaleFactor: v.dpr, mobile: !!v.mobile });
 
         while (idx < want && !aborted && Date.now() < deadline) {
             const target = book.next(); // least-visited kind of page first
             if (!target) break; // only repeats of pages already visited are left
             const path = new URL(target).pathname || "/";
-            const fmt = !LITE && idx < 6 ? { type: "png" } : { type: "jpeg", quality: 86 }; // keep memory sane on big crawls
+            if (LITE && mode === "fresh" && idx - lastReset >= 5) { for (const [k, c] of Object.entries(ctxs)) { await c.close().catch(() => {}); delete ctxs[k]; } lastReset = idx; } // free browser memory every few pages
+            const fmt = !LITE && idx < 6 ? { type: "png" } : { type: "jpeg", quality: 82 }; // keep memory sane on big crawls
             send({ status: `Capturing ${path}`, progress: { done: idx, total: want } });
 
             let dp = null, resp = null, own = true;
@@ -386,6 +434,7 @@ app.post("/api/capture", async (req, res) => {
                 }
                 const bad = await isBad(dp, resp);
                 if (bad) { send({ status: `Skipped ${path} (${bad})` }); skipped.push(`${path}: ${bad}`); if (own) await dp.close(); continue; }
+                await wakeVideo(dp);
                 const v0 = valueOf(await dp.evaluate(MEASURE).catch(() => ({ media: 0.3, blocks: 0.5, footer: 0 })));
                 if (crawl) for (const l of await links(dp, origin)) book.add(l);
                 if (idx > 0 && crawl && v0 < MIN_VALUE) { // mostly text or empty: a poor mockup, but its links were still collected
@@ -393,25 +442,39 @@ app.post("/api/capture", async (req, res) => {
                     if (own) await dp.close();
                     continue;
                 }
+                const topBuf = await dp.screenshot(fmt);
+                if (unusable(await analyze(topBuf, fmt.type))) { // e.g. a player that never showed a picture
+                    send({ status: `Skipped ${path} (black or empty screen)` }); skipped.push(`${path}: black or empty screen`); blackSkipped++;
+                    if (own) await dp.close();
+                    continue;
+                }
+                const meta = await dp.evaluate(PAGE_META).catch(() => ({}));
                 const title = (await dp.title().catch(() => "")).trim().slice(0, 80);
                 const secN = idx < 12 ? secBase : Math.min(secBase, 2); // keep memory sane on big crawls
-                send({ shot: { view: "desktop", page: idx, path, title, section: 0, score: v0, src: img(await dp.screenshot(fmt), fmt.type) } });
-                const ex = secN > 1 ? await extraShots(dp, secN, fmt) : [];
-                ex.forEach((e, k) => send({ shot: { view: "desktop", page: idx, path, title, section: k + 1, score: e.score, src: img(e.buf, fmt.type) } }));
+                await sendBig({ shot: { view: "desktop", page: idx, path, title, brand: meta.brand, h1: meta.h1, section: 0, score: v0, src: img(topBuf, fmt.type) } });
+                const ex = secN > 1 ? await extraShots(dp, secN, fmt, analyze) : [];
+                for (const [k, e] of ex.entries()) await sendBig({ shot: { view: "desktop", page: idx, path, title, section: k + 1, score: e.score, src: img(e.buf, fmt.type) } });
                 if (secN > 1) { if (ex.length) withScroll++; else flat++; }
-                if (idx < 3) {
-                    const full = Math.min(await dp.evaluate(() => document.documentElement.scrollHeight), 8000);
+                const fullPages = LITE ? 2 : 3;
+                if (idx < fullPages) {
+                    const full = Math.min(await dp.evaluate(() => document.documentElement.scrollHeight), LITE ? 4000 : 8000);
                     const buf = await dp.screenshot({ ...fmt, fullPage: true, clip: { x: 0, y: 0, width: VIEWS.desktop.w, height: Math.max(full, VIEWS.desktop.h) } });
-                    send({ shot: { view: "full", page: idx, path, src: img(buf, fmt.type) } });
+                    await sendBig({ shot: { view: "full", page: idx, path, src: img(buf, fmt.type) } });
                 }
                 if (own) await dp.close();
 
-                for (const view of idx < 3 ? ["tablet", "mobile"] : ["mobile"]) {
+                for (const view of idx < fullPages ? ["tablet", "mobile"] : ["mobile"]) {
                     const bufs = [];
-                    const take = async (pg) => { bufs.push({ buf: await pg.screenshot(fmt) }); if (view === "mobile" && secN > 1) bufs.push(...(await extraShots(pg, secN, fmt))); };
+                    const take = async (pg) => {
+                        await wakeVideo(pg);
+                        const b = await pg.screenshot(fmt);
+                        if (unusable(await analyze(b, fmt.type))) return; // black or empty: leave this view out
+                        bufs.push({ buf: b });
+                        if (view === "mobile" && secN > 1) bufs.push(...(await extraShots(pg, secN, fmt, analyze)));
+                    };
                     if (mode === "live") { await emulate(VIEWS[view]); await live.waitForTimeout(700); await take(live); }
                     else { const p = await (await ctxOf(view)).newPage(); p.setDefaultNavigationTimeout(20000); try { await open(p, target); await take(p); } finally { await p.close().catch(() => {}); } }
-                    bufs.forEach((b, k) => send({ shot: { view, page: idx, path, title, section: k, score: b.score, src: img(b.buf, fmt.type) } }));
+                    for (const [k, b] of bufs.entries()) await sendBig({ shot: { view, page: idx, path, title, section: k, score: b.score, src: img(b.buf, fmt.type) } });
                 }
                 if (mode === "live") await emulate(VIEWS.desktop);
                 idx++;
@@ -427,7 +490,7 @@ app.post("/api/capture", async (req, res) => {
             throw new Fatal(`No usable pages found. ${skipped.slice(0, 3).join("; ") || "Nothing could be opened."}${blk ? ` The site tried to load data from ${blk}, which this server cannot reach (a local or LAN address). Use a server on your own network, or put that service online.` : ""}`);
         }
         send({ progress: { done: idx, total: idx } });
-        send({ note: `${secBase > 1 ? `Scroll sections: ${withScroll} page${withScroll === 1 ? "" : "s"} scrolled, ${flat} fit on one screen. ` : ""}Skipped ${book.repeated()} repeated routes (same page, different id) and ${lowValue} low-value pages.` });
+        send({ note: `${asked > want ? `A small hosted server captures up to ${want} pages, so ${asked - want} were left out. Run the server on your computer for more. ` : ""}${secBase > 1 ? `Scroll sections: ${withScroll} page${withScroll === 1 ? "" : "s"} scrolled, ${flat} fit on one screen. ` : ""}Skipped ${book.repeated()} repeated routes, ${lowValue} low-value pages and ${blackSkipped} black or empty screens.` });
 
         if (session) { session.memOnly = mode === "live"; send({ keptOpen: true }); } // signed in for the next capture
         else if (live) { // login without "stay signed in": log out once the run is finished
@@ -444,6 +507,7 @@ app.post("/api/capture", async (req, res) => {
         send({ error: String(e.message || e).split("\n")[0] });
     } finally {
         busy--;
+        await utilCtx?.close().catch(() => {});
         for (const c of Object.values(ctxs)) await c.close().catch(() => {});
         if (session) {
             if (session.dead || (failed && created)) await endSession(session.id); // never leave a half-started sign-in open

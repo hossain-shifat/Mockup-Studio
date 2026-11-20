@@ -10,6 +10,8 @@ Paste a URL, press **Capture**, and every page becomes a set of mockups across 2
 - **Real captures.** A headless Edge/Chrome (Playwright) opens your site and takes desktop, tablet, mobile and full-page screenshots.
 - **Sign-in support.** Enter an email and password once. The studio signs in, explores your pages, and signs out when you are done.
 - **Smart sections.** Each scroll stop is scored by how much imagery and real content is on screen. Footers and empty areas are never used, and the best sections feed the mockups first. The percentage on each screenshot is that score.
+- **Real picture or nothing.** Screenshots that are black (a player with no picture), flat or empty are dropped. Player pages are started muted and moved into the film first. Each mockup uses different screenshots, and a template is skipped when a page lacks the view it needs (for example a phone shot).
+- **Honest copy.** Captions use the site's own name and page heading with a short headline, never `localhost` or an address.
 - **Smart routes.** Pages that differ only by an id (`/media/1` … `/media/100`) count as one kind of page and are visited twice, not a hundred times. Every kind of page is visited once before any is repeated. Legal, sign-in and near-empty pages are skipped.
 - **Page crawler.** Follows same-site links up to a limit you choose (1 to 100). Skips logout and delete links, error pages and blank pages.
 - **Auto mockups.** Every page is placed in every template: laptop, browser window, tablet, phone, flat panel, and multi-device scenes. Colors come from the site itself.
@@ -108,6 +110,10 @@ The hosted server has no password. It captures public websites only, accepts cal
 The container installs Chromium. Free plans sleep when idle and have little memory, so crawls can be slow or run out of memory. A paid instance is more reliable.
 
 ## Troubleshooting
+
+**Render emails: "exceeded its memory limit"**
+- A browser needs more memory than a small instance has. The hosted server now captures one site at a time, at most 12 pages, with smaller screenshots, and restarts its browser contexts every few pages.
+- If the emails continue, run the capture server on your computer, or move the Render service to a plan with at least 2 GB of memory (check the plan page for current sizes).
 
 **Capture stops after a few seconds, or nothing appears**
 - The studio now says how many screenshots arrived, and reports it when the server stops early.

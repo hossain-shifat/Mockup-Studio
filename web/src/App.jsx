@@ -296,7 +296,7 @@ export default function App() {
                     if (m.signedOut !== undefined) setCap((s) => ({ ...s, note: m.signedOut ? "Signed out of the site. Password cleared." : "No sign-out button found. The session was discarded here; sign out of the site yourself if needed." }));
                     if (m.shot) {
                         const sec = m.shot.section ?? 0;
-                        const shot = { key: `${stamp}-${m.shot.page}-${m.shot.view}-${sec}`, page: `${stamp}-${m.shot.page}`, label: `${m.shot.path} · ${m.shot.view}${sec ? ` #${sec + 1}` : ""}`, view: m.shot.view, sec, score: m.shot.score, title: m.shot.title, host: (() => { try { return new URL(target).hostname; } catch { return ""; } })(), src: m.shot.src }; got.push(shot); setShots((s) => [...s, shot]); setCap((s) => ({ ...s, shots: (s.shots || 0) + 1 }));
+                        const shot = { key: `${stamp}-${m.shot.page}-${m.shot.view}-${sec}`, page: `${stamp}-${m.shot.page}`, label: `${m.shot.path} · ${m.shot.view}${sec ? ` #${sec + 1}` : ""}`, view: m.shot.view, sec, score: m.shot.score, title: m.shot.title, brand: m.shot.brand, h1: m.shot.h1, host: (() => { try { return new URL(target).hostname; } catch { return ""; } })(), src: m.shot.src }; got.push(shot); setShots((s) => [...s, shot]); setCap((s) => ({ ...s, shots: (s.shots || 0) + 1 }));
                         
                     }
                 }

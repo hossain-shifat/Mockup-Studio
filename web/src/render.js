@@ -44,14 +44,12 @@ function cast(c, l, k, path) {
 }
 
 // Fit a screenshot into a screen without distorting it:
-// tall -> fit width, show the top | slightly wide -> fit height, centre crop | mismatched -> blurred backdrop + contain
+// tall -> fit width, show the top | slightly wide -> fit height, centre crop | mismatched -> contain on the dark screen
 function drawFit(c, img, x, y, w, h) {
     const iw = img.naturalWidth, ih = img.naturalHeight, ia = iw / ih, sa = w / h;
     if (ia < sa) {
         if (sa < 1.1 || ia > sa * 0.62) { const s = w / iw; c.drawImage(img, 0, 0, iw, Math.min(ih, h / s), x, y, w, Math.min(ih * s, h)); return; }
     } else if (ia <= sa * 1.45) { const s = h / ih, sw = w / s; c.drawImage(img, (iw - sw) / 2, 0, sw, ih, x, y, w, h); return; }
-    const cs = Math.max(w / iw, h / ih);
-    c.save(); c.filter = "blur(22px) brightness(0.8)"; c.drawImage(img, x + (w - iw * cs) / 2, y + (h - ih * cs) / 2, iw * cs, ih * cs); c.restore();
     const s = Math.min(w / iw, h / ih); c.drawImage(img, x + (w - iw * s) / 2, y + (h - ih * s) / 2, iw * s, ih * s);
 }
 
