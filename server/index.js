@@ -185,13 +185,29 @@ async function signOut(page, startUrl, spa) {
 const MEASURE = () => {
     const vw = innerWidth, vh = innerHeight, area = vw * vh;
     const vis = (r) => { const w = Math.min(r.right, vw) - Math.max(r.left, 0), h = Math.min(r.bottom, vh) - Math.max(r.top, 0); return w > 0 && h > 0 ? w * h : 0; };
-    let media = 0, blocks = 0, footer = 0;
+    let media = 0, blocks = 0, footer = 0, imgs = 0, broken = 0, skeleton = 0, empty = 0;
     for (const el of document.querySelectorAll("img,video,canvas,svg,picture")) { const a = vis(el.getBoundingClientRect()); if (a > 3000) media += a; }
+    for (const el of document.querySelectorAll("img")) { // a picture that failed or has not loaded yet shows as alt text or a hole: bad mockup material
+        if (vis(el.getBoundingClientRect()) < 1500) continue;
+        imgs++; if (!el.complete || el.naturalWidth === 0) broken++;
+    }
+    for (const el of document.querySelectorAll("[class*='skeleton' i],[class*='shimmer' i],[class*='spinner' i],[class*='loading' i],[aria-busy='true'],[role='progressbar']")) if (vis(el.getBoundingClientRect()) > 2500) skeleton++;
     for (const el of document.querySelectorAll("h1,h2,h3,h4,button,input,select,textarea,article,li,[class*='card' i]")) if (vis(el.getBoundingClientRect()) > 1500) blocks++;
     for (const el of document.querySelectorAll("footer,[role='contentinfo'],[class*='footer' i],[id*='footer' i]")) footer = Math.max(footer, vis(el.getBoundingClientRect()));
-    return { media: Math.min(media / area, 1), blocks: Math.min(blocks / 14, 1), footer: Math.min(footer / area, 1) };
+    for (const el of document.querySelectorAll("p,div,span,h2,h3")) { // empty states ("No results found", "Nothing here yet") in a big visible area
+        if (el.children.length > 2) continue;
+        const t = (el.innerText || "").trim().toLowerCase();
+        if (t.length > 4 && t.length < 140 && /^(no |nothing |there (are|is) no |we couldn.t find|no data)/.test(t) && /(found|yet|available|results|items|data|events|matches|shows|content)/.test(t) && vis(el.getBoundingClientRect()) > 4000) empty++;
+    }
+    return { media: Math.min(media / area, 1), blocks: Math.min(blocks / 14, 1), footer: Math.min(footer / area, 1), broken: imgs ? broken / imgs : 0, imgs, skeleton, empty };
 };
+const flawOf = (m) => (!m ? "" : m.skeleton ? "still loading" : m.imgs >= 2 && m.broken > 0.2 ? "broken pictures" : m.empty ? "empty state" : "");
 const valueOf = (m) => Math.max(0, 0.55 * m.media + 0.3 * m.blocks - 1.4 * m.footer - (m.media < 0.03 && m.blocks < 0.15 ? 0.2 : 0));
+// let lazy pictures finish before any screenshot: an alt-text hole in a device screen looks broken
+const settle = async (page) => {
+    await page.evaluate(() => Promise.all([...document.images].filter((i) => !i.complete).map((i) => new Promise((r) => { i.addEventListener("load", r, { once: true }); i.addEventListener("error", r, { once: true }); setTimeout(r, 3500); })))).catch(() => {});
+    await page.waitForTimeout(250);
+};
 const MIN_VALUE = 0.1;
 const unusable = (q) => !!q && (q.black > 0.5 || q.std < 5); // black (a player with no picture) or flat (blank page)
 const PAGE_META = () => {
@@ -253,21 +269,24 @@ async function extraShots(page, sections, fmt, check) {
     for (let k = 1; k < stops; k++) {
         const y = Math.round((info.max * k) / (stops - 1));
         await goTo(y);
+        await settle(page);
         const m = await page.evaluate(MEASURE).catch(() => null);
-        if (m) cands.push({ y, m, score: valueOf(m) });
+        if (m) cands.push({ y, m, score: valueOf(m), flaw: flawOf(m) });
     }
-    const pool = cands.filter((c) => c.m.footer < 0.3 && c.score > 0.06).sort((a, b) => b.score - a.score); // never a footer, never empty
+    const pool = cands.filter((c) => c.m.footer < 0.3 && c.score > 0.06 && !c.flaw).sort((a, b) => b.score - a.score); // never a footer, never empty, never half-loaded
     const chosen = [];
     for (const c of pool) {
         if (chosen.length >= sections - 1) break;
         if (chosen.every((o) => Math.abs(o.y - c.y) >= info.vh * 0.6)) chosen.push(c); // distinct sections, not near-duplicates
     }
+    chosen.sort((a, b) => a.y - b.y); // top to bottom, so section order matches the page
     const out = [];
     for (const c of chosen) {
         await goTo(c.y);
+        await settle(page);
         const buf = await page.screenshot(fmt);
         if (check && unusable(await check(buf, fmt.type))) continue; // black or empty: leave it out
-        out.push({ buf, score: c.score });
+        out.push({ buf, score: c.score, pos: +(c.y / info.max).toFixed(3) }); // pos = how far down the page: lets the studio pair the same moment across devices
     }
     await setTop(0);
     return out;
@@ -442,6 +461,8 @@ app.post("/api/capture", async (req, res) => {
                     if (own) await dp.close();
                     continue;
                 }
+                await settle(dp);
+                const topM = await dp.evaluate(MEASURE).catch(() => null), topFlaw = flawOf(topM);
                 const topBuf = await dp.screenshot(fmt);
                 if (unusable(await analyze(topBuf, fmt.type))) { // e.g. a player that never showed a picture
                     send({ status: `Skipped ${path} (black or empty screen)` }); skipped.push(`${path}: black or empty screen`); blackSkipped++;
@@ -451,9 +472,9 @@ app.post("/api/capture", async (req, res) => {
                 const meta = await dp.evaluate(PAGE_META).catch(() => ({}));
                 const title = (await dp.title().catch(() => "")).trim().slice(0, 80);
                 const secN = idx < 12 ? secBase : Math.min(secBase, 2); // keep memory sane on big crawls
-                await sendBig({ shot: { view: "desktop", page: idx, path, title, brand: meta.brand, h1: meta.h1, section: 0, score: v0, src: img(topBuf, fmt.type) } });
+                await sendBig({ shot: { view: "desktop", page: idx, path, title, brand: meta.brand, h1: meta.h1, section: 0, pos: 0, flaw: topFlaw, score: v0, src: img(topBuf, fmt.type) } });
                 const ex = secN > 1 ? await extraShots(dp, secN, fmt, analyze) : [];
-                for (const [k, e] of ex.entries()) await sendBig({ shot: { view: "desktop", page: idx, path, title, section: k + 1, score: e.score, src: img(e.buf, fmt.type) } });
+                for (const [k, e] of ex.entries()) await sendBig({ shot: { view: "desktop", page: idx, path, title, section: k + 1, pos: e.pos, flaw: "", score: e.score, src: img(e.buf, fmt.type) } });
                 if (secN > 1) { if (ex.length) withScroll++; else flat++; }
                 const fullPages = LITE ? 2 : 3;
                 if (idx < fullPages) {
@@ -463,18 +484,20 @@ app.post("/api/capture", async (req, res) => {
                 }
                 if (own) await dp.close();
 
-                for (const view of idx < fullPages ? ["tablet", "mobile"] : ["mobile"]) {
+                for (const view of idx < (LITE ? 2 : 8) ? ["tablet", "mobile"] : ["mobile"]) {
                     const bufs = [];
                     const take = async (pg) => {
                         await wakeVideo(pg);
+                        await settle(pg);
+                        const m0 = await pg.evaluate(MEASURE).catch(() => null);
                         const b = await pg.screenshot(fmt);
                         if (unusable(await analyze(b, fmt.type))) return; // black or empty: leave this view out
-                        bufs.push({ buf: b });
-                        if (view === "mobile" && secN > 1) bufs.push(...(await extraShots(pg, secN, fmt, analyze)));
+                        bufs.push({ buf: b, pos: 0, flaw: flawOf(m0) });
+                        if (secN > 1) bufs.push(...(await extraShots(pg, secN, fmt, analyze)).map((e) => ({ ...e, flaw: "" }))); // tablet scrolls too, so every device can show the same moment
                     };
                     if (mode === "live") { await emulate(VIEWS[view]); await live.waitForTimeout(700); await take(live); }
                     else { const p = await (await ctxOf(view)).newPage(); p.setDefaultNavigationTimeout(20000); try { await open(p, target); await take(p); } finally { await p.close().catch(() => {}); } }
-                    for (const [k, b] of bufs.entries()) await sendBig({ shot: { view, page: idx, path, title, section: k, score: b.score, src: img(b.buf, fmt.type) } });
+                    for (const [k, b] of bufs.entries()) await sendBig({ shot: { view, page: idx, path, title, section: k, pos: b.pos ?? 0, flaw: b.flaw || "", score: b.score, src: img(b.buf, fmt.type) } });
                 }
                 if (mode === "live") await emulate(VIEWS.desktop);
                 idx++;

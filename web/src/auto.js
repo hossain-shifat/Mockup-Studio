@@ -1,5 +1,6 @@
-// Auto-art-director: palette from the site's own screenshot + hand-built layout
-// recipes + bounding-box fitting. No manual placement needed.
+// Auto-art-director. Rule one: a mockup shows ONE page at ONE moment, and every device in it shows that
+// same moment (the desktop, tablet and phone view of the same section), exactly as a real responsive site would.
+// Palette from the site's own screenshot + hand-built layout recipes + bounding-box fitting.
 import { DEVICES } from "./render";
 
 let n = 100000;
@@ -42,48 +43,50 @@ const palettes = (p) => ({
     mist: { a: hsl(210, 22, 92), b: hsl(212, 20, 85) },
 });
 
-// layer: [device, shotView, x, y, scale, rotZ, rotX, rotY] authored on a 1600×1000 plane.
+
+// layer: [device, x, y, scale, rotZ, rotX, rotY] authored on a 1600×1000 plane. The screenshot view comes from the device itself.
 // m = margin (negative = deliberate bleed), dy = vertical shift as fraction of height.
+// kind: "single" (one device), "responsive" (different devices, same page, same moment) or
+//       "flow" (several screens of the SAME device: shows different moments of one page, off unless asked for).
 const LIGHT = "#f4f3f1", SILVER = "#cfcdc8", TITAN = "#9a968e", WIDE = [1600, 1000];
 const R = [
-    { name: "Cropped hero", cap: "tl", size: WIDE, bgs: ["ink", "deep", "slate"], m: -0.04, dy: 0.12, max: 1.7, shadow: 0.6, layers: [["laptop", "desktop", 800, 500, 1, 0, 6, -10]] },
-    { name: "Straight on", cap: "tl", size: WIDE, bgs: ["bone", "stone", "ink"], m: 0.12, shadow: 0.3, frame: LIGHT, layers: [["browser", "desktop", 800, 500, 1]] },
-    { name: "Laptop + phone", cap: "tl", align: "bottom", size: WIDE, bgs: ["slate", "clay", "ink"], m: 0.1, layers: [["laptop", "desktop", 700, 500, 1], ["phone", "mobile", 1190, 590, 0.9]] },
-    { name: "Phone trio", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.1, layers: [["phone", "mobile", 480, 560, 0.95], ["phone", "mobile+1", 800, 470, 0.95], ["phone", "mobile+2", 1120, 560, 0.95]] },
-    { name: "Window + phone", align: "bottom", size: WIDE, bgs: ["deep", "bone", "slate"], m: 0.02, frame: LIGHT, layers: [["browser", "desktop", 620, 430, 1], ["phone", "mobile", 1180, 640, 0.95]] },
-    { name: "Tablet + phone", align: "bottom", size: WIDE, bgs: ["stone", "ink", "deep"], m: 0.1, layers: [["tablet", "tablet", 640, 520, 1], ["phone", "mobile", 1050, 610, 0.9]] },
-    { name: "Cascade", size: WIDE, bgs: ["ink", "bone", "slate"], m: 0.09, layers: [["browser", "full", 600, 400, 0.82, 0, 0, 0, 1.4], ["browser", "desktop+1", 860, 570, 0.92]] },
-    { name: "Social square", cap: "tl", size: [1080, 1080], bgs: ["bone", "deep", "clay"], m: 0.04, layers: [["browser", "desktop", 430, 400, 0.85], ["phone", "mobile", 700, 640, 1]] },
-    { name: "Tilted laptop", cap: "bc", size: WIDE, bgs: ["slate", "bone", "deep"], m: 0.1, dy: -0.02, frame: SILVER, layers: [["laptop", "desktop", 800, 500, 1, -5, 4, 14]] },
-    { name: "Phone hero", cap: "tl", size: WIDE, bgs: ["ink", "clay", "deep"], m: -0.1, dy: 0.18, max: 1.7, frame: TITAN, layers: [["phone", "mobile", 800, 500, 1.2, 0, 0, 0]] },
-    { name: "Phone duo", size: WIDE, bgs: ["bone", "stone", "slate"], m: 0.1, shadow: 0.4, layers: [["phone", "mobile", 700, 520, 1, -5], ["phone", "mobile+1", 960, 500, 1, 5]] },
-    { name: "Desktop + tablet", cap: "tl", align: "bottom", size: WIDE, bgs: ["stone", "ink", "deep"], m: 0.09, frame: SILVER, layers: [["browser", "desktop", 560, 500, 1], ["tablet", "tablet", 1180, 540, 0.9, 4]] },
-    { name: "Light cascade", cap: "tl", size: WIDE, bgs: ["bone", "stone", "clay"], m: 0.09, shadow: 0.35, frame: LIGHT, layers: [["browser", "desktop", 700, 430, 0.9], ["browser", "desktop+1", 900, 570, 0.9]] },
-    { name: "Four phones", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.08, layers: [["phone", "mobile", 360, 540, 0.85], ["phone", "mobile+1", 640, 470, 0.85], ["phone", "mobile+2", 920, 540, 0.85], ["phone", "mobile+3", 1200, 470, 0.85]] },
-    { name: "Tablet hero", size: WIDE, bgs: ["deep", "bone", "ink"], m: 0.1, frame: TITAN, layers: [["tablet", "tablet", 800, 500, 1.2, -4, 0, -8]] },
-    { name: "Perspective stack", cap: "tl", size: WIDE, bgs: ["ink", "deep", "slate"], m: 0.08, frame: LIGHT, layers: [["browser", "desktop+2", 520, 360, 0.72, 0, 8, -20, 1.8], ["browser", "desktop+1", 760, 470, 0.82, 0, 8, -20, 0.9], ["browser", "desktop", 1020, 600, 0.92, 0, 8, -20]] },
-    { name: "Mirror laptops", size: WIDE, bgs: ["slate", "clay", "bone"], m: 0.08, frame: SILVER, layers: [["laptop", "desktop", 520, 520, 0.85, 0, 0, 18], ["laptop", "desktop+1", 1080, 520, 0.85, 0, 0, -18]] },
-    { name: "Phone fan", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.1, layers: [["phone", "mobile+1", 560, 580, 0.9, -12, 0, 0, 1.2], ["phone", "mobile+2", 1040, 580, 0.9, 12, 0, 0, 1.2], ["phone", "mobile", 800, 520, 1]] },
-    { name: "Gallery wall", cap: "tl", size: WIDE, bgs: ["bone", "stone", "ink"], m: 0.06, shadow: 0.35, layers: [["panel", "desktop", 400, 360, 0.5], ["panel", "desktop+1", 880, 360, 0.5], ["panel", "desktop+2", 1360, 360, 0.5], ["panel", "desktop+3", 400, 660, 0.5], ["panel", "desktop+4", 880, 660, 0.5], ["panel", "desktop+5", 1360, 660, 0.5]] },
-    { name: "Panel + phone", cap: "tl", size: WIDE, bgs: ["deep", "bone", "slate"], m: 0.08, align: "bottom", layers: [["panel", "desktop", 640, 500, 1.05], ["phone", "mobile", 1230, 560, 0.95]] },
-    { name: "Floating cards", size: WIDE, bgs: ["ink", "slate", "bone"], m: 0.06, layers: [["laptop", "desktop", 800, 520, 1], ["panel", "desktop+1", 330, 320, 0.55, -6, 0, 0, 1.4], ["panel", "desktop+2", 1290, 700, 0.55, 5, 0, 0, 1.4]] },
-    { name: "Phone staircase", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.08, layers: [["phone", "mobile", 400, 700, 0.8, 0, 0, 0, 1.6], ["phone", "mobile+1", 670, 610, 0.8, 0, 0, 0, 0.8], ["phone", "mobile+2", 940, 520, 0.8], ["phone", "mobile+3", 1210, 430, 0.8]] },
-    { name: "Split screen", size: WIDE, bgs: ["bone", "deep", "stone"], m: -0.04, align: "bottom", layers: [["panel", "desktop", 560, 520, 1.3], ["phone", "mobile", 1260, 540, 1]] },
-    { name: "Laptop + tablet", size: WIDE, bgs: ["stone", "slate", "deep"], m: 0.09, align: "bottom", frame: SILVER, layers: [["laptop", "desktop", 700, 500, 1], ["tablet", "tablet", 1250, 560, 0.9, 5]] },
-    { name: "Hero panel", cap: "bc", size: WIDE, bgs: ["ink", "deep", "clay"], m: 0.08, shadow: 0.6, layers: [["panel", "desktop", 800, 500, 1, 0, 6, -8]] },
-];
-const STYLES = ["plain", "mesh", "stage", "grid", "beam"];
-// designer-picked colour pairs: a bold flat base + one contrasting block colour
+    // ── one device
+    { name: "Cropped hero", size: WIDE, bgs: ["ink", "deep", "slate"], m: -0.04, dy: 0.12, max: 1.7, shadow: 0.6, layers: [["laptop", 800, 500, 1, 0, 6, -10]] },
+    { name: "Straight on", cap: "tl", size: WIDE, bgs: ["bone", "stone", "ink"], m: 0.12, shadow: 0.3, frame: LIGHT, layers: [["browser", 800, 500, 1]] },
+    { name: "Tilted laptop", cap: "bc", size: WIDE, bgs: ["slate", "bone", "deep"], m: 0.1, frame: SILVER, layers: [["laptop", 800, 500, 1, -5, 4, 14]] },
+    { name: "Phone hero", size: WIDE, bgs: ["ink", "clay", "deep"], m: -0.1, dy: 0.18, max: 1.7, frame: TITAN, layers: [["phone", 800, 500, 1.2]] },
+    { name: "Tablet hero", size: WIDE, bgs: ["deep", "bone", "ink"], m: 0.1, frame: TITAN, layers: [["tablet", 800, 500, 1.2, -4, 0, -8]] },
+    { name: "Hero panel", cap: "bc", size: WIDE, bgs: ["ink", "deep", "clay"], m: 0.08, shadow: 0.6, layers: [["panel", 800, 500, 1, 0, 6, -8]] },
+    // ── responsive: the same page on different devices
+    { name: "Laptop + phone", cap: "tl", align: "bottom", size: WIDE, bgs: ["slate", "clay", "ink"], m: 0.1, layers: [["laptop", 700, 500, 1], ["phone", 1190, 590, 0.9]] },
+    { name: "Window + phone", align: "bottom", size: WIDE, bgs: ["deep", "bone", "slate"], m: 0.02, frame: LIGHT, layers: [["browser", 620, 430, 1], ["phone", 1180, 640, 0.95]] },
+    { name: "Tablet + phone", align: "bottom", size: WIDE, bgs: ["stone", "ink", "deep"], m: 0.1, layers: [["tablet", 640, 520, 1], ["phone", 1050, 610, 0.9]] },
+    { name: "Desktop + tablet", cap: "tl", align: "bottom", size: WIDE, bgs: ["stone", "ink", "deep"], m: 0.09, frame: SILVER, layers: [["browser", 560, 500, 1], ["tablet", 1180, 540, 0.9, 4]] },
+    { name: "Laptop + tablet", align: "bottom", size: WIDE, bgs: ["stone", "slate", "deep"], m: 0.09, frame: SILVER, layers: [["laptop", 700, 500, 1], ["tablet", 1250, 560, 0.9, 5]] },
+    { name: "Panel + phone", cap: "tl", align: "bottom", size: WIDE, bgs: ["deep", "bone", "slate"], m: 0.08, layers: [["panel", 640, 500, 1.05], ["phone", 1230, 560, 0.95]] },
+    { name: "Split screen", align: "bottom", size: WIDE, bgs: ["bone", "deep", "stone"], m: -0.04, layers: [["panel", 560, 520, 1.3], ["phone", 1260, 540, 1]] },
+    { name: "Every screen", cap: "tl", align: "bottom", size: WIDE, bgs: ["slate", "ink", "deep"], m: 0.08, frame: SILVER, layers: [["laptop", 640, 500, 1], ["tablet", 1090, 560, 0.85], ["phone", 1360, 600, 0.8]] },
+    { name: "Social square", cap: "tl", size: [1080, 1080], bgs: ["bone", "deep", "clay"], m: 0.04, layers: [["browser", 430, 400, 0.85], ["phone", 700, 640, 1]] },
+    // ── flow: several screens of one device (different moments of the same page)
+    { kind: "flow", name: "Phone duo", size: WIDE, bgs: ["bone", "stone", "slate"], m: 0.1, shadow: 0.4, layers: [["phone", 700, 520, 1, -5], ["phone", 960, 500, 1, 5]] },
+    { kind: "flow", name: "Phone trio", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.1, layers: [["phone", 480, 560, 0.95], ["phone", 800, 470, 0.95], ["phone", 1120, 560, 0.95]] },
+    { kind: "flow", name: "Four phones", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.08, layers: [["phone", 360, 540, 0.85], ["phone", 640, 470, 0.85], ["phone", 920, 540, 0.85], ["phone", 1200, 470, 0.85]] },
+    { kind: "flow", name: "Phone staircase", size: WIDE, bgs: ["clay", "ink", "stone"], m: 0.08, layers: [["phone", 400, 700, 0.8], ["phone", 670, 610, 0.8], ["phone", 940, 520, 0.8], ["phone", 1210, 430, 0.8]] },
+    { kind: "flow", name: "Browser cascade", size: WIDE, bgs: ["ink", "bone", "slate"], m: 0.09, layers: [["browser", 600, 400, 0.82], ["browser", 860, 570, 0.92]] },
+    { kind: "flow", name: "Mirror laptops", size: WIDE, bgs: ["slate", "clay", "bone"], m: 0.08, frame: SILVER, layers: [["laptop", 520, 520, 0.85, 0, 0, 18], ["laptop", 1080, 520, 0.85, 0, 0, -18]] },
+    { kind: "flow", name: "Gallery wall", cap: "tl", size: WIDE, bgs: ["bone", "stone", "ink"], m: 0.06, shadow: 0.35, layers: [["panel", 400, 360, 0.5], ["panel", 880, 360, 0.5], ["panel", 1360, 360, 0.5], ["panel", 400, 660, 0.5], ["panel", 880, 660, 0.5], ["panel", 1360, 660, 0.5]] },
+].map((t) => ({ ...t, kind: t.kind || (t.layers.length === 1 ? "single" : "responsive") }));
+export const TEMPLATE_KINDS = R.reduce((a, t) => ((a[t.kind] = (a[t.kind] || 0) + 1), a), {});
+
+// one calm, professional backdrop family: soft studio tones from the site, plus a few curated pairs. No loud random blocks.
+const STYLES = ["plain", "mesh", "stage"];
 const CURATED = [
-    { a: "#2b4bd6", b: "#2646c8", c2: "#f1d3da" }, { a: "#d4673f", b: "#c95f38", c2: "#f3e6d6" },
-    { a: "#c9d8c5", b: "#bccdb7", c2: "#23352a" }, { a: "#efe2b8", b: "#e6d6a6", c2: "#26241f" },
-    { a: "#cfc4e3", b: "#c2b5da", c2: "#312a4a" }, { a: "#1d1e22", b: "#16171a", c2: "#e8dcc8" },
-    { a: "#c5d9ea", b: "#b6cde2", c2: "#162a4a" }, { a: "#eccdc6", b: "#e4bfb7", c2: "#5a2230" },
-    { a: "#59603a", b: "#4f5634", c2: "#e9e4cf" }, { a: "#14213d", b: "#101a31", c2: "#e5a13a" },
-    { a: "#efe9dd", b: "#e6dfd0", c2: "#1a1a1a" },
+    { a: "#2b4bd6", b: "#2646c8", c2: "#e9edfb" }, { a: "#d9d4ca", b: "#cdc7bb", c2: "#f4f1ea" },
+    { a: "#1d1e22", b: "#16171a", c2: "#e8dcc8" }, { a: "#14213d", b: "#101a31", c2: "#e8edf6" },
+    { a: "#c5d9ea", b: "#b6cde2", c2: "#f1f6fb" }, { a: "#e9e2d4", b: "#ddd5c4", c2: "#faf7f1" },
 ];
-const FRAMES_ON_DARK = ["#d9d7d2", "#8f8a82", "#c8b8a2", "#26272c", "#2c3a52"], FRAMES_ON_LIGHT = ["#26272c", "#2c3a52", "#8f8a82", "#d9d7d2"]; // device finishes: silver, natural, desert, graphite, blue
-const BOLD = ["circle", "split", "band", "arch", "plain"];
+const FRAMES_ON_DARK = ["#d9d7d2", "#8f8a82", "#c8b8a2", "#26272c"], FRAMES_ON_LIGHT = ["#26272c", "#2c3a52", "#8f8a82", "#d9d7d2"];
+const SHAPES = ["circle", "arch"];
 const pretty = (p) => { const t = p === "/" ? "Home" : p.split("/").filter(Boolean).pop().replace(/[-_]+/g, " "); return t.charAt(0).toUpperCase() + t.slice(1); };
 const lum = (h) => { const v = parseInt(h.slice(1), 16); return (0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255; };
 const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "page";
@@ -101,7 +104,7 @@ function fitGroup(L, W, H, m, max, dy = 0, avail = 1) {
     for (const l of L) { l.x = Math.round(W / 2 + (l.x - cx) * s); l.y = Math.round(H * (0.5 + dy) + (l.y - cy) * s); l.scale = +(l.scale * s).toFixed(3); }
 }
 
-// ── honest, designed copy: the site's own name and heading, a short headline by page role, never an address
+// ── honest, designed copy: the site's own name and a short headline by page role, never an address
 const COPY = {
     home: ["Everything in one place", "Your world, beautifully organised", "Start here, go anywhere"],
     live: ["Live, without the wait", "Every channel, one tap away", "Always on, always ready"],
@@ -132,82 +135,107 @@ const idLike = (t) => /^\d+$/.test(t) || (/[A-Z]/.test(t) && /[a-z]/.test(t) && 
 const okBrand = (b) => !!b && b.length <= 28 && !/localhost|ngrok|\.local\b|^\d{1,3}(\.\d{1,3}){3}/i.test(b);
 const cleanTitle = (t) => (t || "").split(/\s[|\u2013\u2014-]\s/)[0].trim();
 const lastTitlePart = (t) => { const parts = (t || "").split(/\s[|\u2013\u2014-]\s/); return parts[parts.length - 1].trim(); };
+const realHost = (h) => !!h && !/localhost|ngrok|\.local$|^\d{1,3}(\.\d{1,3}){3}$/i.test(h) && h.includes(".");
+const momentName = (pos) => (pos < 0.06 ? "Top of page" : `${Math.round(pos * 100)}% down the page`);
 
-export async function generate(shots, seed = 0) {
-    // every captured page x every template, each with different, fitting screenshots
-    const pages = new Map();
+const TOL = 0.2; // two screenshots show "the same moment" when they sit within 20% of the page height of each other
+
+// Group screenshots into pages. Each view keeps a list of { key, pos } sorted top to bottom. Flawed shots (broken pictures,
+// half-loaded, empty states) never enter a mockup.
+function collect(shots) {
+    const pages = new Map(), dropped = [];
     for (const s of shots) {
+        if (s.flaw) { dropped.push(`${s.label.split(" \u00b7 ")[0]} (${s.view}): ${s.flaw}`); continue; }
         const k = s.page ?? s.key;
-        if (!pages.has(k)) pages.set(k, { views: {}, label: s.label.split(" \u00b7 ")[0], title: "", brand: "", h1: "" });
+        if (!pages.has(k)) pages.set(k, { views: {}, label: s.label.split(" \u00b7 ")[0], title: "", brand: "", h1: "", host: "" });
         const p = pages.get(k);
-        (p.views[s.view] ??= [])[s.sec ?? 0] = s.key;
+        (p.views[s.view] ??= []).push({ key: s.key, pos: s.pos ?? 0 });
         if (s.title && !p.title) p.title = s.title;
         if (s.brand && !p.brand) p.brand = s.brand;
         if (s.h1 && !p.h1) p.h1 = s.h1;
+        if (s.host && !p.host) p.host = s.host;
     }
-    const entries = [...pages.entries()], sets = entries.map(([, v]) => v.views), any = shots[shots.length - 1]?.key;
+    for (const p of pages.values()) for (const v of Object.values(p.views)) v.sort((a, b) => a.pos - b.pos);
+    return { pages: [...pages.entries()], dropped };
+}
+// nearest screenshot of a view to a moment, or null when that device has nothing close enough
+const near = (list, pos) => { let best = null; for (const e of list || []) if (Math.abs(e.pos - pos) <= TOL && (!best || Math.abs(e.pos - pos) < Math.abs(best.pos - pos))) best = e; return best; };
+
+export async function generate(shots, seed = 0, opts = {}) {
+    const flow = !!opts.flow, skipped = [];
+    const { pages: entries, dropped } = collect(shots);
+    if (dropped.length) skipped.push(`${dropped.length} screenshot${dropped.length === 1 ? "" : "s"} left out as not mockup-ready: ${[...new Set(dropped)].slice(0, 4).join("; ")}${dropped.length > 4 ? "…" : ""}`);
     const sameTitle = entries.length > 1 && new Set(entries.map(([, v]) => v.title)).size <= 1;
     const siteBrand = entries.map(([, v]) => (okBrand(v.brand) ? v.brand : okBrand(lastTitlePart(v.title)) ? lastTitlePart(v.title) : "")).find(Boolean) || "";
 
-    const base = (t) => t.split("+")[0], offOf = (t) => +t.split("+")[1] || 0;
-    // does the page this layer would show have the right kind of screenshot (a phone needs a phone view)?
-    const viewOk = (si, token) => {
-        const set = sets[(si + offOf(token)) % sets.length], b = base(token);
-        if (set.upload) return true;
-        return b === "full" ? !!(set.full || set.desktop) : !!set[b];
-    };
-    // pick a screenshot, preferring ones this mockup has not used yet
-    const pick = (si, token, sec, used) => {
-        const v = base(token), off = offOf(token), home = (si + off) % sets.length, set = sets[home];
-        const own = ((off && sets.length === 1 ? set.full ?? set[v] : set[v] ?? set.desktop ?? Object.values(set)[0]) || []).filter(Boolean);
-        const r = own.length ? sec % own.length : 0, order = [...own.slice(r), ...own.slice(0, r)];
-        for (let k = 1; k < sets.length; k++) order.push(...((sets[(home + k) % sets.length][v] || []).filter(Boolean)));
-        const key = order.find((x) => !used.has(x)) ?? order[0] ?? any;
-        used.add(key);
-        return key;
-    };
-
     const first = (v) => (v.desktop ?? Object.values(v)[0] ?? [])[0];
-    const pals = await Promise.all(sets.map((v) => palette(shots.find((s) => s.key === first(v))?.src)));
+    const pals = await Promise.all(entries.map(([, p]) => palette(shots.find((s) => s.key === first(p.views)?.key)?.src)));
     const out = [];
     entries.forEach(([pk, info], si) => {
         const pal = palettes(pals[si]), h = pals[si].h, role = roleOf(info.label);
         const last = info.label.split("/").filter(Boolean).pop() || "";
         const pageName = info.h1 || (!sameTitle && info.title ? cleanTitle(info.title) : idLike(last) ? ROLE_NAME[role] || "Details" : pretty(info.label));
-        R.forEach((r, ri) => {
-            if (!r.layers.every(([, view]) => viewOk(si, view))) return; // never show a desktop screen inside a phone when a real phone view is missing
+        const upload = !!info.views.upload;
+        // the moments this page can show: where the desktop view was captured (or any view if there is no desktop shot)
+        const base = info.views.desktop || Object.values(info.views).find((v) => v.length) || [];
+        const moments = [...new Set(base.map((e) => e.pos))];
+        if (!moments.length) return;
+        const path = info.label.startsWith("/") ? info.label : "";
+        const addr = realHost(info.host) ? `${info.host}${path && path !== "/" ? path : ""}` : siteBrand || pageName;
+        let ti = 0;
+        R.forEach((r) => {
+            if (r.kind === "flow" && !flow) return;
+            const ri = ti++; // stable per template, so a seed change reshuffles only colours
+            const views = r.layers.map(([d]) => DEVICES[d].view);
+            // find the moment(s) where EVERY device in this mockup has a matching screenshot of the same page
+            const ok = moments.filter((p) => upload || views.every((v) => near(info.views[v], p)));
+            let picks;
+            if (r.kind === "flow") { // same device several times: needs that many different clean moments, no repeats
+                if (ok.length < r.layers.length) return;
+                const rot = ri % ok.length, seq = [...ok.slice(rot), ...ok.slice(0, rot)].slice(0, r.layers.length).sort((a, b) => a - b);
+                picks = r.layers.map((_, j) => seq[j]);
+            } else {
+                if (!ok.length) return; // e.g. a phone template when no phone view exists: skipped, never faked with a desktop shot
+                const m = ok[(ri + (seed > 0 ? seed : 0)) % ok.length];
+                picks = r.layers.map(() => m);
+            }
+            const keyOf = (v, p) => (upload ? info.views.upload[0].key : near(info.views[v], p).key);
+            const pick0 = picks[0];
+
             let c, c2, style;
-            if ((seed + si + ri) % 3 !== 0) { // two thirds: bold flat colour blocking
-                const cu = CURATED[(seed + si * 2 + ri) % CURATED.length];
-                c = cu; c2 = cu.c2; style = BOLD[(seed + si + ri * 2) % BOLD.length];
-            } else { // one third: studio tones drawn from the site itself
+            const roll = (seed + si + ri) % 3, compact = r.layers.length <= 2 && r.kind !== "flow";
+            if (roll !== 0) { // designed pair, calm and consistent
+                const cu = CURATED[(seed + si + ri) % CURATED.length];
+                c = cu; c2 = cu.c2; style = compact && r.size[0] > r.size[1] && roll === 1 ? SHAPES[(seed + si + ri) % SHAPES.length] : STYLES[(seed + si + ri) % STYLES.length];
+            } else { // studio tones drawn from the site itself
                 const dark = lum(pal[r.bgs[0]].a) < 0.5, keys = [...r.bgs, ...(dark ? ["navy", "forest", "plum"] : ["sand", "mist"])];
                 c = pal[keys[(seed + si + ri) % keys.length]]; style = STYLES[(seed + si * 3 + ri) % STYLES.length];
                 c2 = lum(c.a) < 0.5 ? hsl(h + 20, 38, 32) : hsl(h + 20, 40, 74);
             }
-            const shape = ["circle", "split", "band", "arch"].includes(style);
+            const shape = SHAPES.includes(style);
             const pool = lum(c.a) < 0.5 ? FRAMES_ON_DARK : FRAMES_ON_LIGHT, frame = r.frame ?? pool[(seed + si + ri) % pool.length];
-            const used = new Set();
-            const layers = r.layers.map(([device, view, x, y, scale, rotZ = 0, rotX = 0, rotY = 0], j) => ({
-                id: n++, device, shot: pick(si, view, ri + j, used), x, y, scale, rotX, rotY, rotZ, blur: 0, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: pageName,
+            const layers = r.layers.map(([device, x, y, scale, rotZ = 0, rotX = 0, rotY = 0], j) => ({
+                id: n++, device, shot: keyOf(DEVICES[device].view, picks[j]), x, y, scale, rotX, rotY, rotZ, blur: 0, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: addr,
             }));
             if (r.align === "bottom") { // shared baseline: devices sit on the same line
                 const bot = Math.max(...layers.map((l) => l.y + (DEVICES[l.device].h * l.scale) / 2));
                 layers.forEach((l) => { l.y = bot - (DEVICES[l.device].h * l.scale) / 2; });
             }
-            fitGroup(layers, r.size[0], r.size[1], r.m, r.max ?? 1.6, (r.dy ?? 0) + (r.cap === "tl" ? 0.06 : r.cap === "bc" ? -0.06 : 0), r.cap ? 0.88 : 1);
-            const lines = COPY[role];
+            // captions get their own band: devices are fitted into the rest, so text never sits on a device
+            const dy = (r.dy ?? 0) + (r.cap === "tl" ? 0.095 : r.cap === "bc" ? -0.075 : 0), avail = r.cap === "tl" ? 0.75 : r.cap === "bc" ? 0.79 : 1;
+            fitGroup(layers, r.size[0], r.size[1], r.m, r.max ?? 1.6, dy, avail);
+            const eyebrow = siteBrand || "Interface design", lines = COPY[role];
             out.push({
-                id: `${pk}|${r.name}`, pageIndex: si, pageLabel: info.label, name: r.name,
-                file: `p${String(si + 1).padStart(2, "0")}-${slug(info.label === "/" ? "home" : info.label)}-${slug(r.name)}`,
+                id: `${pk}|${r.name}|${pick0}`, pageIndex: si, pageLabel: info.label, name: r.name, kind: r.kind, moment: momentName(pick0), pageKey: pk,
+                file: `p${String(si + 1).padStart(2, "0")}-${slug(info.label === "/" ? "home" : info.label)}-${slug(r.name)}${pick0 ? `-${Math.round(pick0 * 100)}` : ""}`,
                 doc: {
                     size: { w: r.size[0], h: r.size[1] },
                     bg: { type: "gradient", a: c.a, b: c.b, angle: 165, glow: false, spot: !shape, vig: !shape, grain: true, style, c2, hl: hsl(h, 50, lum(c.a) < 0.5 ? 45 : 75) },
                     layers,
-                    caption: r.cap ? { pos: r.cap, eyebrow: siteBrand || "Interface design", title: lines[(si + ri) % lines.length], meta: pageName } : null,
+                    caption: r.cap ? { pos: r.cap, eyebrow, title: lines[(si + ri) % lines.length], meta: pageName.toLowerCase() === eyebrow.toLowerCase() ? "" : pageName } : null,
                 },
             });
         });
     });
-    return out;
+    return { items: out, skipped };
 }

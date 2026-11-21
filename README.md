@@ -4,6 +4,15 @@ Capture any website, even one behind a login, and generate hundreds of professio
 
 Paste a URL, press **Capture**, and every page becomes a set of mockups across 25 templates. Review them in a gallery, tick the ones you want, and download them as a ZIP.
 
+## What changed in 1.8
+
+- **One mockup = one page, one moment.** Every device in a mockup shows the *same page* at the *same scroll point*, each in its own viewport (desktop, tablet, phone), like a real responsive site. A template is skipped when a page lacks a needed view. Nothing is faked with a desktop shot in a phone.
+- **Multi-screen flows are opt-in.** Phone duo/trio/four, cascades and gallery walls show several scroll points of one page. They are off until you switch on *Multi-screen flows* in the Mockups step.
+- **Quality gate.** Shots with broken pictures, half-loaded content (skeletons, spinners) or empty states ("No results found") are left out and listed on the Capture step.
+- **Realistic phones.** The page starts below the status bar and Dynamic Island, with time and battery, so the island never covers the app header.
+- **Captions wrap** instead of cutting off with "...", and never repeat the site name.
+- **Three-step UI:** Capture, Mockups, Edit & export.
+
 ## Features
 
 - **Scroll sections.** Each page is scrolled, including inner scroll containers, and captured at the top, middle and bottom, so mockups show more than the first screen.

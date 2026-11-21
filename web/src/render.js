@@ -53,12 +53,39 @@ function drawFit(c, img, x, y, w, h) {
     const s = Math.min(w / iw, h / ih); c.drawImage(img, x + (w - iw * s) / 2, y + (h - ih * s) / 2, iw * s, ih * s);
 }
 
-function screen(c, img, x, y, w, h, r) {
+// colour of the top edge of a screenshot, so the phone status bar blends into the app instead of covering it
+const edge = new WeakMap();
+function topColor(img) {
+    let v = edge.get(img); if (v) return v;
+    const t = document.createElement("canvas"); t.width = 8; t.height = 1;
+    const g = t.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, img.naturalWidth, Math.min(6, img.naturalHeight), 0, 0, 8, 1);
+    const d = g.getImageData(0, 0, 8, 1).data; let r = 0, gr = 0, b = 0;
+    for (let i = 0; i < 32; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2]; }
+    v = { r: Math.round(r / 8), g: Math.round(gr / 8), b: Math.round(b / 8) }; v.light = (0.299 * v.r + 0.587 * v.g + 0.114 * v.b) / 255 > 0.6;
+    edge.set(img, v); return v;
+}
+
+// inset > 0 (phones): the page starts below the status bar / Dynamic Island, like a real device. The bar shows time and battery.
+function screen(c, img, x, y, w, h, r, inset = 0) {
     c.save(); rr(c, x, y, w, h, r); c.clip();
     c.fillStyle = "#0a0a0c"; c.fillRect(x, y, w, h);
-    if (img) drawFit(c, img, x, y, w, h);
+    if (img) {
+        if (inset) {
+            const t = topColor(img), ink = t.light ? "#14151a" : "#f4f3f1";
+            c.fillStyle = `rgb(${t.r},${t.g},${t.b})`; c.fillRect(x, y, w, inset);
+            drawFit(c, img, x, y + inset, w, h - inset);
+            c.fillStyle = ink; c.textBaseline = "middle"; c.font = '600 14px "Instrument Sans", system-ui, sans-serif';
+            c.textAlign = "left"; c.fillText("9:41", x + 30, y + 26);
+            c.textAlign = "right"; // signal bars + battery
+            for (let i = 0; i < 4; i++) { rr(c, x + w - 78 + i * 5, y + 29 - (i + 1) * 3, 3, (i + 1) * 3, 1); c.fill(); }
+            c.globalAlpha = 0.5; rr(c, x + w - 50, y + 20, 22, 11, 3.5); c.stroke ? (c.strokeStyle = ink, c.lineWidth = 1, c.stroke()) : 0; c.globalAlpha = 1;
+            rr(c, x + w - 48, y + 22, 16, 7, 2); c.fill();
+            c.globalAlpha = 0.55; rr(c, x + w / 2 - 50, y + h - 9, 100, 4, 2); c.fill(); c.globalAlpha = 1; // home indicator
+        } else drawFit(c, img, x, y, w, h);
+    }
     const g = c.createLinearGradient(x, y, x + w * 0.9, y + h * 0.9); // glass sheen
-    g.addColorStop(0, "rgba(255,255,255,0.09)"); g.addColorStop(0.42, "rgba(255,255,255,0)");
+    g.addColorStop(0, "rgba(255,255,255,0.07)"); g.addColorStop(0.42, "rgba(255,255,255,0)");
     c.fillStyle = g; c.fillRect(x, y, w, h);
     c.restore();
 }
@@ -77,7 +104,7 @@ function body(c, l, img, k) {
         cast(c, l, k, () => rr(c, x, y, w, h, R)); rr(c, x, y, w, h, R); c.fill();
         c.strokeStyle = rim; c.lineWidth = 2.4; rr(c, x + 1, y + 1, w - 2, h - 2, R - 1); c.stroke();
         c.strokeStyle = "#050506"; c.lineWidth = 7; rr(c, x + p - 3, y + p - 3, w - 2 * p + 6, h - 2 * p + 6, Math.max(R - p + 3, 6)); c.stroke();
-        screen(c, img, x + p, y + p, w - 2 * p, h - 2 * p, Math.max(R - p, 5));
+        screen(c, img, x + p, y + p, w - 2 * p, h - 2 * p, Math.max(R - p, 5), ph ? 46 : 0);
         c.fillStyle = "#000";
         if (ph) { rr(c, -48, y + p + 12, 96, 28, 14); c.fill(); } else { c.beginPath(); c.arc(0, y + p / 2, 3, 0, 7); c.fill(); }
     } else if (l.device === "browser") {
@@ -166,7 +193,16 @@ function bgFill(c, bg, W, H, k) {
     }
 }
 
-// editorial caption: number, page title, host. Ink colour is picked from the pixels actually behind it.
+// editorial caption: eyebrow, headline (wrapped, never cut with "..."), page name. Ink colour is picked from the pixels actually behind it.
+function wrap(c, text, maxW, maxLines) {
+    const words = text.split(/\s+/), lines = []; let cur = "";
+    for (const w of words) {
+        const t = cur ? `${cur} ${w}` : w;
+        if (c.measureText(t).width <= maxW || !cur) cur = t; else { lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines.length <= maxLines ? lines : null;
+}
 function caption(c, doc, k) {
     const cp = doc.caption; if (!cp) return;
     const { w: W, h: H } = doc.size, u = H / 1000, left = cp.pos === "tl";
@@ -175,13 +211,14 @@ function caption(c, doc, k) {
     const dark = (0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]) / 255 < 0.55;
     const ink = dark ? "#f4f3f1" : "#14151a", dim = dark ? "rgba(244,243,241,0.62)" : "rgba(20,21,26,0.58)";
     c.save(); c.textAlign = left ? "left" : "center"; c.textBaseline = "alphabetic";
-    c.font = `500 ${15 * u}px "Instrument Sans", sans-serif`; c.letterSpacing = `${2 * u}px`; c.fillStyle = dim; c.fillText(cp.eyebrow, x, y);
-    c.font = `600 ${40 * u}px "Bricolage Grotesque", "Instrument Sans", sans-serif`; c.letterSpacing = "0px"; c.fillStyle = ink;
-    const maxW = W * (left ? 0.24 : 0.5); let t = cp.title;
-    while (c.measureText(t).width > maxW && t.length > 4) t = t.slice(0, -2);
-    if (t !== cp.title) t = t.trimEnd() + "…";
-    c.fillText(t, x, y + 50 * u);
-    c.font = `400 ${16 * u}px "Instrument Sans", sans-serif`; c.fillStyle = dim; c.fillText(cp.meta, x, y + 78 * u);
+    c.font = `500 ${15 * u}px "Instrument Sans", sans-serif`; c.letterSpacing = `${2 * u}px`; c.fillStyle = dim; c.fillText(cp.eyebrow.toUpperCase(), x, y);
+    // headline: shrink first, then wrap onto at most two lines. Nothing is ever truncated.
+    const maxW = W * (left ? 0.5 : 0.7); let size = 40 * u, lines = null;
+    c.letterSpacing = "0px";
+    for (; size >= 26 * u && !lines; size -= 2 * u) { c.font = `600 ${size}px "Bricolage Grotesque", "Instrument Sans", sans-serif`; lines = wrap(c, cp.title, maxW, 1); }
+    if (!lines) { size = 34 * u; c.font = `600 ${size}px "Bricolage Grotesque", "Instrument Sans", sans-serif`; lines = wrap(c, cp.title, maxW, 2) || [cp.title]; }
+    c.fillStyle = ink; lines.forEach((t, i) => c.fillText(t, x, y + 46 * u + i * size * 1.12));
+    if (cp.meta) { c.font = `400 ${16 * u}px "Instrument Sans", sans-serif`; c.fillStyle = dim; c.fillText(cp.meta, x, y + 46 * u + (lines.length - 1) * size * 1.12 + 30 * u); }
     c.restore();
 }
 
