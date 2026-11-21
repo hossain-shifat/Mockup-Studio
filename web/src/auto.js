@@ -11,7 +11,12 @@ const hsl = (h, s, l) => {
 };
 const loadImg = (src) => new Promise((ok) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ok(null); i.src = src; });
 
-async function palette(src) {
+const palCache = new Map();
+async function palette(src, key) {
+    if (key && palCache.has(key)) return palCache.get(key);
+    const r = await palette0(src); if (key) palCache.set(key, r); return r;
+}
+async function palette0(src) {
     const img = src && (await loadImg(src));
     if (!img) return { h: 225, light: false, colorful: false };
     const c = document.createElement("canvas"); c.width = c.height = 32;
@@ -161,81 +166,98 @@ function collect(shots) {
 // nearest screenshot of a view to a moment, or null when that device has nothing close enough
 const near = (list, pos) => { let best = null; for (const e of list || []) if (Math.abs(e.pos - pos) <= TOL && (!best || Math.abs(e.pos - pos) < Math.abs(best.pos - pos))) best = e; return best; };
 
+// How many routes (pages) feed each template. 1 = every template gets its own route, so the set has variety;
+// 2 = two routes per template; 0 = every route in every template (can be hundreds).
 export async function generate(shots, seed = 0, opts = {}) {
-    const flow = !!opts.flow, skipped = [];
+    const flow = !!opts.flow, per = opts.per ?? 1, skipped = [];
     const { pages: entries, dropped } = collect(shots);
     if (dropped.length) skipped.push(`${dropped.length} screenshot${dropped.length === 1 ? "" : "s"} left out as not mockup-ready: ${[...new Set(dropped)].slice(0, 4).join("; ")}${dropped.length > 4 ? "…" : ""}`);
     const sameTitle = entries.length > 1 && new Set(entries.map(([, v]) => v.title)).size <= 1;
     const siteBrand = entries.map(([, v]) => (okBrand(v.brand) ? v.brand : okBrand(lastTitlePart(v.title)) ? lastTitlePart(v.title) : "")).find(Boolean) || "";
 
     const first = (v) => (v.desktop ?? Object.values(v)[0] ?? [])[0];
-    const pals = await Promise.all(entries.map(([, p]) => palette(shots.find((s) => s.key === first(p.views)?.key)?.src)));
-    const out = [];
-    entries.forEach(([pk, info], si) => {
-        const pal = palettes(pals[si]), h = pals[si].h, role = roleOf(info.label);
-        const last = info.label.split("/").filter(Boolean).pop() || "";
-        const pageName = info.h1 || (!sameTitle && info.title ? cleanTitle(info.title) : idLike(last) ? ROLE_NAME[role] || "Details" : pretty(info.label));
-        const upload = !!info.views.upload;
-        // the moments this page can show: where the desktop view was captured (or any view if there is no desktop shot)
-        const base = info.views.desktop || Object.values(info.views).find((v) => v.length) || [];
-        const moments = [...new Set(base.map((e) => e.pos))];
-        if (!moments.length) return;
-        const path = info.label.startsWith("/") ? info.label : "";
-        const addr = realHost(info.host) ? `${info.host}${path && path !== "/" ? path : ""}` : siteBrand || pageName;
-        let ti = 0;
-        R.forEach((r) => {
-            if (r.kind === "flow" && !flow) return;
-            const ri = ti++; // stable per template, so a seed change reshuffles only colours
-            const views = r.layers.map(([d]) => DEVICES[d].view);
-            // find the moment(s) where EVERY device in this mockup has a matching screenshot of the same page
-            const ok = moments.filter((p) => upload || views.every((v) => near(info.views[v], p)));
-            let picks;
-            if (r.kind === "flow") { // same device several times: needs that many different clean moments, no repeats
-                if (ok.length < r.layers.length) return;
-                const rot = ri % ok.length, seq = [...ok.slice(rot), ...ok.slice(0, rot)].slice(0, r.layers.length).sort((a, b) => a - b);
-                picks = r.layers.map((_, j) => seq[j]);
-            } else {
-                if (!ok.length) return; // e.g. a phone template when no phone view exists: skipped, never faked with a desktop shot
-                const m = ok[(ri + (seed > 0 ? seed : 0)) % ok.length];
-                picks = r.layers.map(() => m);
-            }
-            const keyOf = (v, p) => (upload ? info.views.upload[0].key : near(info.views[v], p).key);
-            const pick0 = picks[0];
+    const byKey = new Map(shots.map((s) => [s.key, s]));
+    const pals = await Promise.all(entries.map(([, p]) => { const f = first(p.views); return palette(byKey.get(f?.key)?.src, f?.key); }));
 
-            let c, c2, style;
-            const roll = (seed + si + ri) % 3, compact = r.layers.length <= 2 && r.kind !== "flow";
-            if (roll !== 0) { // designed pair, calm and consistent
-                const cu = CURATED[(seed + si + ri) % CURATED.length];
-                c = cu; c2 = cu.c2; style = compact && r.size[0] > r.size[1] && roll === 1 ? SHAPES[(seed + si + ri) % SHAPES.length] : STYLES[(seed + si + ri) % STYLES.length];
-            } else { // studio tones drawn from the site itself
-                const dark = lum(pal[r.bgs[0]].a) < 0.5, keys = [...r.bgs, ...(dark ? ["navy", "forest", "plum"] : ["sand", "mist"])];
-                c = pal[keys[(seed + si + ri) % keys.length]]; style = STYLES[(seed + si * 3 + ri) % STYLES.length];
-                c2 = lum(c.a) < 0.5 ? hsl(h + 20, 38, 32) : hsl(h + 20, 40, 74);
-            }
-            const shape = SHAPES.includes(style);
-            const pool = lum(c.a) < 0.5 ? FRAMES_ON_DARK : FRAMES_ON_LIGHT, frame = r.frame ?? pool[(seed + si + ri) % pool.length];
-            const layers = r.layers.map(([device, x, y, scale, rotZ = 0, rotX = 0, rotY = 0], j) => ({
-                id: n++, device, shot: keyOf(DEVICES[device].view, picks[j]), x, y, scale, rotX, rotY, rotZ, blur: 0, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: addr,
-            }));
-            if (r.align === "bottom") { // shared baseline: devices sit on the same line
-                const bot = Math.max(...layers.map((l) => l.y + (DEVICES[l.device].h * l.scale) / 2));
-                layers.forEach((l) => { l.y = bot - (DEVICES[l.device].h * l.scale) / 2; });
-            }
-            // captions get their own band: devices are fitted into the rest, so text never sits on a device
-            const dy = (r.dy ?? 0) + (r.cap === "tl" ? 0.095 : r.cap === "bc" ? -0.075 : 0), avail = r.cap === "tl" ? 0.75 : r.cap === "bc" ? 0.79 : 1;
-            fitGroup(layers, r.size[0], r.size[1], r.m, r.max ?? 1.6, dy, avail);
-            const eyebrow = siteBrand || "Interface design", lines = COPY[role];
-            out.push({
-                id: `${pk}|${r.name}|${pick0}`, pageIndex: si, pageLabel: info.label, name: r.name, kind: r.kind, moment: momentName(pick0), pageKey: pk,
-                file: `p${String(si + 1).padStart(2, "0")}-${slug(info.label === "/" ? "home" : info.label)}-${slug(r.name)}${pick0 ? `-${Math.round(pick0 * 100)}` : ""}`,
-                doc: {
-                    size: { w: r.size[0], h: r.size[1] },
-                    bg: { type: "gradient", a: c.a, b: c.b, angle: 165, glow: false, spot: !shape, vig: !shape, grain: true, style, c2, hl: hsl(h, 50, lum(c.a) < 0.5 ? 45 : 75) },
-                    layers,
-                    caption: r.cap ? { pos: r.cap, eyebrow, title: lines[(si + ri) % lines.length], meta: pageName.toLowerCase() === eyebrow.toLowerCase() ? "" : pageName } : null,
-                },
-            });
+    // facts about each route, computed once
+    const P = entries.map(([pk, info], si) => {
+        const role = roleOf(info.label), last = info.label.split("/").filter(Boolean).pop() || "";
+        const pageName = info.h1 || (!sameTitle && info.title ? cleanTitle(info.title) : idLike(last) ? ROLE_NAME[role] || "Details" : pretty(info.label));
+        const base = info.views.desktop || Object.values(info.views).find((v) => v.length) || [];
+        const path = info.label.startsWith("/") ? info.label : "";
+        const sc = Object.values(info.views).flat().map((e) => byKey.get(e.key)?.score).filter((x) => x != null);
+        return {
+            pk, info, si, pal: palettes(pals[si]), h: pals[si].h, role, pageName, upload: !!info.views.upload, moments: [...new Set(base.map((e) => e.pos))],
+            addr: realHost(info.host) ? `${info.host}${path && path !== "/" ? path : ""}` : siteBrand || pageName, score: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : 0,
+        };
+    }).filter((p) => p.moments.length);
+    const use = P.map(() => 0), momUse = P.map(() => new Map());
+    const out = []; let ti = 0;
+
+    const build = (r, ri, e) => {
+        const { p, ok } = e, { info, si, pal, h, role, pageName, upload, addr, pk } = p;
+        // pick the moment of this page that has been used least so far (so one route does not always show its top screen)
+        let picks;
+        if (r.kind === "flow") { // same device several times: needs that many different clean moments, no repeats
+            const rot = (ri + seed) % ok.length, seq = [...ok.slice(rot), ...ok.slice(0, rot)].slice(0, r.layers.length).sort((a, b) => a - b);
+            picks = r.layers.map((_, j) => seq[j]);
+        } else {
+            const mu = momUse[e.i], pool = [...ok].sort((a, b) => (mu.get(a) || 0) - (mu.get(b) || 0) || a - b), m = pool[(seed > 0 ? seed : 0) % Math.max(1, pool.filter((x) => (mu.get(x) || 0) === (mu.get(pool[0]) || 0)).length)];
+            picks = r.layers.map(() => m);
+        }
+        picks.forEach((m) => momUse[e.i].set(m, (momUse[e.i].get(m) || 0) + 1));
+        const keyOf = (v, pos) => (upload ? info.views.upload[0].key : near(info.views[v], pos).key);
+        const pick0 = picks[0];
+
+        let c, c2, style;
+        const roll = (seed + si + ri) % 3, compact = r.layers.length <= 2 && r.kind !== "flow";
+        if (roll !== 0) { // designed pair, calm and consistent
+            const cu = CURATED[(seed + si + ri) % CURATED.length];
+            c = cu; c2 = cu.c2; style = compact && r.size[0] > r.size[1] && roll === 1 ? SHAPES[(seed + si + ri) % SHAPES.length] : STYLES[(seed + si + ri) % STYLES.length];
+        } else { // studio tones drawn from the site itself
+            const dark = lum(pal[r.bgs[0]].a) < 0.5, keys = [...r.bgs, ...(dark ? ["navy", "forest", "plum"] : ["sand", "mist"])];
+            c = pal[keys[(seed + si + ri) % keys.length]]; style = STYLES[(seed + si * 3 + ri) % STYLES.length];
+            c2 = lum(c.a) < 0.5 ? hsl(h + 20, 38, 32) : hsl(h + 20, 40, 74);
+        }
+        const shape = SHAPES.includes(style);
+        const pool = lum(c.a) < 0.5 ? FRAMES_ON_DARK : FRAMES_ON_LIGHT, frame = r.frame ?? pool[(seed + si + ri) % pool.length];
+        const layers = r.layers.map(([device, x, y, scale, rotZ = 0, rotX = 0, rotY = 0], j) => ({
+            id: n++, device, shot: keyOf(DEVICES[device].view, picks[j]), x, y, scale, rotX, rotY, rotZ, blur: 0, depth: 0.18, radius: 1, frame, shadow: r.shadow ?? 0.5, url: addr,
+        }));
+        if (r.align === "bottom") { // shared baseline: devices sit on the same line
+            const bot = Math.max(...layers.map((l) => l.y + (DEVICES[l.device].h * l.scale) / 2));
+            layers.forEach((l) => { l.y = bot - (DEVICES[l.device].h * l.scale) / 2; });
+        }
+        // captions get their own band: devices are fitted into the rest, so text never sits on a device
+        const dy = (r.dy ?? 0) + (r.cap === "tl" ? 0.095 : r.cap === "bc" ? -0.075 : 0), avail = r.cap === "tl" ? 0.75 : r.cap === "bc" ? 0.79 : 1;
+        fitGroup(layers, r.size[0], r.size[1], r.m, r.max ?? 1.6, dy, avail);
+        const eyebrow = siteBrand || "Interface design", lines = COPY[role];
+        out.push({
+            id: `${pk}|${r.name}|${pick0}`, pageIndex: si, pageLabel: info.label, name: r.name, kind: r.kind, moment: momentName(pick0), pageKey: pk,
+            file: `p${String(si + 1).padStart(2, "0")}-${slug(info.label === "/" ? "home" : info.label)}-${slug(r.name)}${pick0 ? `-${Math.round(pick0 * 100)}` : ""}`,
+            doc: {
+                size: { w: r.size[0], h: r.size[1] },
+                bg: { type: "gradient", a: c.a, b: c.b, angle: 165, glow: false, spot: !shape, vig: !shape, grain: true, style, c2, hl: hsl(h, 50, lum(c.a) < 0.5 ? 45 : 75) },
+                layers,
+                caption: r.cap ? { pos: r.cap, eyebrow, title: lines[(si + ri) % lines.length], meta: pageName.toLowerCase() === eyebrow.toLowerCase() ? "" : pageName } : null,
+            },
         });
-    });
+    };
+
+    for (const r of R) {
+        if (r.kind === "flow" && !flow) continue;
+        const ri = ti++; // stable per template, so a seed change reshuffles routes and colours, not the template list
+        const views = r.layers.map(([d]) => DEVICES[d].view);
+        // routes that can fill this template: EVERY device in it needs a matching screenshot of that same route
+        const elig = P.map((p, i) => ({ p, i, ok: p.upload ? p.moments : p.moments.filter((m) => views.every((v) => near(p.info.views[v], m))) }))
+            .filter((e) => (r.kind === "flow" ? e.ok.length >= r.layers.length : e.ok.length > 0));
+        if (!elig.length) continue; // e.g. a phone template when no route has a phone view: skipped, never faked with a desktop shot
+        const rot = (e) => (((e.i - ri - seed) % P.length) + P.length) % P.length;
+        // each template takes the least-used routes first, so routes are spread across templates instead of every route filling every template.
+        // Single-device hero shots prefer the richest routes.
+        elig.sort((a, b) => use[a.i] - use[b.i] || (r.kind === "single" && seed === 0 ? b.p.score - a.p.score : 0) || rot(a) - rot(b));
+        const chosen = per === 0 ? elig : elig.slice(0, per);
+        for (const e of chosen) { use[e.i]++; build(r, ri, e); }
+    }
     return { items: out, skipped };
 }

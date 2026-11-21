@@ -11,7 +11,11 @@ Paste a URL, press **Capture**, and every page becomes a set of mockups across 2
 - **Quality gate.** Shots with broken pictures, half-loaded content (skeletons, spinners) or empty states ("No results found") are left out and listed on the Capture step.
 - **Realistic phones.** The page starts below the status bar and Dynamic Island, with time and battery, so the island never covers the app header.
 - **Captions wrap** instead of cutting off with "...", and never repeat the site name.
-- **Three-step UI:** Capture, Mockups, Edit & export.
+- **Old three-column layout, polished.** Left panel (Capture, Mockups, Layers, Backdrop), stage (Mockups, Editor, Screenshots), right inspector with export always visible.
+- **Live mockups.** They appear while the capture is still running, about a second after a page arrives. You can open and edit them mid-capture.
+- **One route per template.** Each template gets its own route (page), spread evenly, instead of every route in every template. Choose One, Two or All in the Mockups tab.
+- **Instant downloads.** Ticked or hovered mockups are rendered in the background, so Download starts at once. Single mockups download as a plain PNG or JPG. Several stream into one ZIP.
+- **No long scrolling.** Capture settings sit behind Scope, Sign in and More switches. Progress stays pinned at the bottom.
 
 ## Features
 
